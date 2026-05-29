@@ -1,0 +1,22 @@
+[package]
+name = "xycutpp_core"  # Nombre interno del crate de Rust
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "xycutpp_core"  # El nombre que se usará para el módulo nativo compilado
+crate-type = ["cdylib"]
+
+[dependencies]
+# xycut-plus-plus = "^0.0.2"
+xycut-plus-plus = { path = "src/xycut_plus_plus" }
+
+pyo3 = { version = "0.28.3", features = ["extension-module"] }
+log = "0.4"
+pyo3-log = "0.13.3"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = 3
+strip = true
