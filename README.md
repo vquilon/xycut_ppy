@@ -1,7 +1,7 @@
 # XYCut++ Python Wrapper (xycutpp)
 
 [![PyPI version](https://img.shields.io/pypi/v/xycutpp.svg)](https://pypi.org/project/xycutppy/)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/main.yml)](https://github.com/vquilonr/xycut_ppy/actions)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/ci-cd.yml)](https://github.com/vquilonr/xycut_ppy/actions)
 [![License](https://img.shields.io/crates/l/xycut-plus-plus.svg)](LICENSE)
 
 Este proyecto proporciona un wrapper de Python de alto rendimiento para el crate de Rust [`xycut-plus-plus`](https://lib.rs/crates/xycut-plus-plus). El paquete permite calcular el orden de lectura de un conjunto de elementos (bounding boxes) en una página, utilizando la velocidad y seguridad de Rust con una API Pythonic y fácil de usar.
