@@ -1,6 +1,6 @@
-# XYCut++ Python Wrapper (xycutpp)
+# XYCut++ Python Wrapper (xycutppy)
 
-[![PyPI version](https://img.shields.io/pypi/v/xycutpp.svg)](https://pypi.org/project/xycutppy/)
+[![PyPI version](https://img.shields.io/pypi/v/xycutppy.svg)](https://pypi.org/project/xycutppy/)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/ci-cd.yml)](https://github.com/vquilonr/xycut_ppy/actions)
 [![License](https://img.shields.io/crates/l/xycut-plus-plus.svg)](LICENSE)
 
@@ -19,7 +19,7 @@ Este proyecto proporciona un wrapper de Python de alto rendimiento para el crate
 Una vez publicado en PyPI, el paquete se puede instalar fácilmente con `pip`:
 
 ```bash
-pip install xycutpp
+pip install xycutppy
 ```
 
 ## 🚀 Uso Rápido (Quickstart)
@@ -27,7 +27,7 @@ pip install xycutpp
 A continuación se muestra un ejemplo básico de cómo utilizar el paquete para determinar el orden de lectura de un conjunto de elementos.
 
 ```python
-from xycutpp import compute_order, SemanticLabel, XYCutConfig
+from xycutppy import compute_order, SemanticLabel, XYCutConfig
 
 # 1. Define los elementos a ordenar.
 # Cada elemento es un diccionario con id, coordenadas (x1, y1, x2, y2) y una etiqueta.
