@@ -16,32 +16,38 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
+            python-architecture: x64
           - os: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
+            python-architecture: arm64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
+            python-architecture: x64
           - os: windows-latest
             target: i686-pc-windows-msvc
+            python-architecture: x86
 
     steps:
-    # Usamos las versiones estables más recientes de las actions (v4/v5)
-    - uses: actions/checkout@v4
+    # Usamos las versiones estables más recientes de las actions
+    - uses: actions/checkout@v7
       with:
         persist-credentials: false
 
     - name: Set up Python
-      uses: actions/setup-python@v5
+      id: setup-python
+      uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
+        architecture: ${{ matrix.python-architecture }}
 
     - name: Build wheel with Maturin
       uses: PyO3/maturin-action@v1
       with:
         target: ${{ matrix.target }}
-        args: --release --out dist --interpreter python
+        args: --release --out dist --interpreter "${{ steps.setup-python.outputs.python-path }}"
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-${{ matrix.os }}-${{ matrix.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
@@ -60,7 +66,7 @@ jobs:
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: python-package-distributions-*
         merge-multiple: true
@@ -86,7 +92,7 @@ jobs:
 
     steps:
     - name: Download all the dists
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         pattern: python-package-distributions-*
         merge-multiple: true
