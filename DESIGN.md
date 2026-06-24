@@ -1,68 +1,68 @@
-# DESIGN: Arquitectura e Implementación de XY-Cut++ (Rust Port)
+# DESIGN: XY-Cut++ Architecture and Implementation (Rust Port)
 
-Este apartado amplía el quickstart con decisiones de arquitectura y estado actual de implementación en el paquete `xycutppy`.
+This section expands on the quickstart with architecture decisions and current implementation status in the `xycutppy` package.
 
-## 🧱 Arquitectura actual por backends
+## 🧱 Current backend architecture
 
-El wrapper Python expone dos motores en la misma librería, seleccionables en runtime:
+The Python wrapper exposes two engines in the same library, selectable at runtime:
 
-- `paper`: backend original (GPL), basado en `src/paper/xycut_plus_plus`.
-- `datalab`: backend Rust del sorter de OpenDataLoader (Apache-2.0), en `src/datalab/xycut_plus_plus_sorter`.
+- `paper`: original backend (GPL), based on `src/paper/xycut_plus_plus`.
+- `datalab`: Rust backend of the OpenDataLoader sorter (Apache-2.0), in `src/datalab/xycut_plus_plus_sorter`.
 
-### Aislamiento entre módulos
+### Module isolation
 
-`paper` y `datalab` están desacoplados:
+`paper` and `datalab` are decoupled:
 
-1. `datalab` no depende de traits ni tipos de `paper`.
-2. `datalab` define su propio `Element` y opera como crate independiente.
-3. `src/lib.rs` del wrapper solo convierte `PyElement -> datalab::Element` cuando se llama el backend `datalab`.
+1. `datalab` does not depend on traits or types from `paper`.
+2. `datalab` defines its own `Element` and runs as an independent crate.
+3. Wrapper `src/lib.rs` only converts `PyElement -> datalab::Element` when `datalab` is called.
 
-Esto permite evolución independiente de ambos algoritmos y simplifica compliance de licencias.
+This allows independent evolution of both algorithms and simplifies license compliance.
 
-## 🏗️ Arquitectura del algoritmo (Datalab Rust)
+## 🏗️ Algorithm architecture (Datalab Rust)
 
-La implementación `datalab` conserva la estructura de 4 fases del flujo Java:
+The `datalab` implementation keeps the Java flow's 4-stage structure:
 
-### Fase 1: detección de `Cross-Layout`
+### Stage 1: `Cross-Layout` detection
 
-Detecta bloques muy anchos y con solape horizontal suficiente:
+Detects very wide blocks with enough horizontal overlap:
 
-- Regla base: `width >= beta * max_width`.
-- Confirmación de contexto: solape con al menos `MIN_OVERLAP_COUNT` elementos.
-- Resultado: separación entre `cross_layout` y `remaining`.
+- Base rule: `width >= beta * max_width`.
+- Context confirmation: overlap with at least `MIN_OVERLAP_COUNT` elements.
+- Output: split into `cross_layout` and `remaining`.
 
-### Fase 2: densidad y preferencia de eje
+### Stage 2: density and axis preference
 
-Calcula `content_area / region_area`:
+Computes `content_area / region_area`:
 
-- Si supera `DEFAULT_DENSITY_THRESHOLD`, activa `prefer_horizontal_first`.
-- Esta preferencia se usa como desempate cuando ambos cortes son viables con gaps equivalentes.
+- If above `DEFAULT_DENSITY_THRESHOLD`, enables `prefer_horizontal_first`.
+- This preference is used as tie-breaker when both cuts are valid with equivalent gaps.
 
-### Fase 3: segmentación recursiva
+### Stage 3: recursive segmentation
 
-`recursive_segment` busca mejor corte horizontal y vertical, aplica umbral de gap y divide en subgrupos:
+`recursive_segment` finds best horizontal and vertical cuts, applies gap threshold, and splits into subgroups:
 
-- Usa `MIN_GAP_THRESHOLD` para evitar cortes por ruido.
-- Si no hay corte válido, fallback a orden geométrico `Y desc, X asc`.
-- Filtra outliers estrechos al buscar corte vertical (`NARROW_ELEMENT_WIDTH_RATIO`).
+- Uses `MIN_GAP_THRESHOLD` to avoid noise cuts.
+- If no valid cut exists, falls back to geometric order `Y desc, X asc`.
+- Filters narrow outliers when searching vertical cuts (`NARROW_ELEMENT_WIDTH_RATIO`).
 
-### Fase 4: merge final
+### Stage 4: final merge
 
-Reinserta `cross_layout` comparando `top_y` contra el flujo principal:
+Reinserts `cross_layout` by comparing `top_y` against the main flow:
 
-- Merge estable y puramente geométrico.
-- Sin pesos semánticos del paper original.
+- Stable, purely geometric merge.
+- No semantic weighting from the original paper.
 
-## 🦀 Decisiones de ingeniería aplicadas en Rust
+## 🦀 Engineering decisions applied in Rust
 
-1. **Orden robusto de `f32`**: se usa `f32::total_cmp` para evitar ambigüedades con `NaN`.
-2. **Remoción segura por índice**: `cross_layout` se separa por índice/máscara booleana, no por `id`.
-3. **Uso real de `prefer_horizontal_first`**: ya no es parámetro fantasma; actúa como desempate de corte.
-4. **Clonación controlada y legibilidad**: se mantiene enfoque con `Vec`/`clone` por claridad; se preasigna capacidad en rutas críticas (`Vec::with_capacity`).
+1. **Robust `f32` ordering**: uses `f32::total_cmp` to avoid `NaN` ambiguities.
+2. **Safe index-based removal**: separates `cross_layout` by index/boolean mask, not by `id`.
+3. **Real use of `prefer_horizontal_first`**: no longer a ghost parameter; now a cut tie-breaker.
+4. **Controlled cloning and readability**: keeps `Vec`/`clone` approach for clarity; pre-allocates capacity in critical paths (`Vec::with_capacity`).
 
-## 📌 Estado de labels semánticos en código
+## 📌 Semantic label status in code
 
-En la API Rust/Python expuesta por `paper`, el enum actual incluye:
+In the Rust/Python API exposed by `paper`, the current enum includes:
 
 - `CrossLayout`
 - `HorizontalTitle`
@@ -70,47 +70,47 @@ En la API Rust/Python expuesta por `paper`, el enum actual incluye:
 - `Vision`
 - `Regular`
 
-En `datalab` actual, el algoritmo es geométrico y no consume labels en el núcleo de ordenación.
+In current `datalab`, the algorithm is geometric and does not consume labels in the sorting core.
 
-## 🔧 Notas de evolución
+## 🔧 Evolution notes
 
-Si en producción aparecen cuellos de botella con páginas extremas (decenas de miles de cajas), el siguiente salto de optimización recomendado es migrar la recursión a particionado in-place con `&mut [Element]`. Mientras tanto, la implementación actual prioriza mantenibilidad y trazabilidad del algoritmo.
+If production shows bottlenecks with extreme pages (tens of thousands of boxes), the recommended next optimization is moving recursion to in-place partitioning with `&mut [Element]`. For now, the current implementation prioritizes maintainability and algorithm traceability.
 
-# Entendiendo los `SemanticLabel` en XY-Cut++ (Rust Port)
+# Understanding `SemanticLabel` in XY-Cut++ (Rust Port)
 
-Este documento explica el propósito del enumerador `SemanticLabel` dentro del trait `BoundingBox`, su correspondencia con la estructura de un PDF tradicional, y las decisiones de diseño arquitectónico tomadas para este *port* en Rust.
+This document explains the purpose of `SemanticLabel` in the `BoundingBox` trait, its mapping to traditional PDF structure, and the architecture decisions taken in this Rust port.
 
-## 📖 Contexto Histórico: El Paper vs. La Realidad
+## 📖 Historical context: paper vs reality
 
-El algoritmo XY-Cut++ original (basado en el paper *arXiv:2504.10258*) define un *pipeline* de 4 fases. La **Fase 4 (Cross-Modal Matching)** utiliza etiquetas semánticas (`SemanticLabel`) para decidir la prioridad con la que los elementos "extraídos" (como encabezados o imágenes) se vuelven a insertar en el flujo de texto principal.
+The original XY-Cut++ algorithm (based on paper *arXiv:2504.10258*) defines a 4-stage pipeline. **Stage 4 (Cross-Modal Matching)** uses semantic labels (`SemanticLabel`) to decide reinsertion priority for extracted elements (like headers or images) into the main text flow.
 
-**⚠️ Nota de Implementación:** La implementación oficial de OpenDataLoader en Java (en la que se basa este *port* de Rust) **omitió la Fase 4 y el uso de etiquetas semánticas**. Los mantenedores descubrieron que, al leer directamente de la estructura del PDF en lugar de usar un modelo de visión artificial (OCR), basarse en la geometría pura producía resultados más estables y rápidos. 
+**⚠️ Implementation note:** The official OpenDataLoader Java implementation (on which this Rust port is based) **omitted Stage 4 and semantic label usage**. Maintainers found that reading directly from PDF structure rather than OCR/vision models gave more stable and faster results.
 
-Por lo tanto, en nuestra implementación base, el `SemanticLabel` se expone en el trait para compatibilidad y futuras extensiones, pero el algoritmo principal toma decisiones basadas puramente en coordenadas X/Y y densidades.
+Therefore, in this base implementation, `SemanticLabel` is exposed in the trait for compatibility and future extensions, but the main algorithm uses only X/Y coordinates and density.
 
 ---
 
-## 🏷️ Tipos de `SemanticLabel` y su equivalencia en PDF
+## 🏷️ `SemanticLabel` types and PDF equivalents
 
-Si decides implementar la re-inserción semántica (Stage 4 del paper) o usar etiquetas para filtrar antes de ordenar, aquí tienes la correspondencia de los tipos semánticos sugeridos con el estándar PDF (Tagged PDF / PDF/UA):
+If you choose to implement semantic reinsertion (paper Stage 4) or use labels for pre-sort filtering, here is the suggested mapping to PDF standards (Tagged PDF / PDF/UA):
 
-| SemanticLabel (XY-Cut++) | Equivalencia en PDF (Tagged PDF) | Descripción y Función en el Algoritmo |
+| SemanticLabel (XY-Cut++) | PDF equivalent (Tagged PDF) | Description and role in algorithm |
 | :--- | :--- | :--- |
-| `CrossLayout` | `Artifact` (Pagination), `Header`, `Footer` | Elementos que cruzan toda la página (encabezados, pies de página, números de página). Tienen la **máxima prioridad** de reinserción en los extremos del documento. |
-| `Title` / `Heading` | `H1`, `H2`, `H3`, `H4`... | Títulos que a menudo abarcan varias columnas. El algoritmo original del paper los usa para anclar el inicio de nuevas secciones o columnas. |
-| `BodyText` / `Regular` | `P` (Paragraph), `Span` | El texto normal. Constituye el "ruido de fondo" y es lo que la Fase 3 de segmentación recursiva (XY-Cut) ordena activamente buscando los espacios en blanco. |
-| `Vision` / `Figure` | `Figure`, `Formula` | Imágenes, gráficos o ecuaciones matemáticas complejas. En el paper, tienen prioridad media y suelen usarse como "bloqueadores" alrededor de los cuales el texto debe fluir. |
-| `Table` | `Table`, `TR`, `TD` | Tablas de datos. Al igual que las imágenes, son bloques sólidos indivisibles. El algoritmo no debe intentar cortar una tabla por la mitad. |
+| `CrossLayout` | `Artifact` (Pagination), `Header`, `Footer` | Elements spanning the full page (headers, footers, page numbers). They have the **highest reinsertion priority** at document edges. |
+| `Title` / `Heading` | `H1`, `H2`, `H3`, `H4`... | Titles that often span multiple columns. The original paper uses them to anchor starts of new sections/columns. |
+| `BodyText` / `Regular` | `P` (Paragraph), `Span` | Normal text. This is background content actively sorted by Stage 3 recursive segmentation (XY-Cut) by finding whitespace. |
+| `Vision` / `Figure` | `Figure`, `Formula` | Images, charts, or complex equations. In the paper, these have medium priority and often act as blockers around which text flows. |
+| `Table` | `Table`, `TR`, `TD` | Data tables. Like images, they are indivisible solid blocks. The algorithm should not cut a table in half. |
 
 ---
 
-## 🚀 Cómo usar `SemanticLabel` en Python
+## 🚀 How to use `SemanticLabel` in Python
 
-Para ordenar elementos con `xycutppy` solo necesitas construir una lista de diccionarios con los campos `id`, `x1`, `y1`, `x2`, `y2` y `label`. El campo `label` acepta cualquier valor de `SemanticLabel`.
+To sort elements with `xycutppy`, build a list of dictionaries with fields `id`, `x1`, `y1`, `x2`, `y2`, and `label`. The `label` field accepts any `SemanticLabel` value.
 
-### Opción A: Modo Geométrico Puro (Recomendado - Estilo OpenDataLoader)
+### Option A: pure geometric mode (recommended - OpenDataLoader style)
 
-Si solo quieres ordenar por geometría sin semántica, asigna `SemanticLabel.Regular` a todos los elementos. El algoritmo ignorará etiquetas y operará puramente sobre coordenadas.
+If you only want geometric ordering without semantics, assign `SemanticLabel.Regular` to all elements. The algorithm will ignore labels and operate purely on coordinates.
 
 ```python
 from xycutppy import compute_order, SemanticLabel
@@ -127,14 +127,14 @@ ordered_ids = compute_order(elements, page_bounds)
 print(ordered_ids)  # e.g. [0, 1, 2, 3]
 ```
 
-### Opción B: Mapeo desde etiquetas de un modelo YOLO / Layout Detection
+### Option B: mapping from YOLO / layout detection labels
 
-Si usas un modelo de detección como *PP-DocLayout*, *DocLayNet* o cualquier YOLO entrenado en documentos, recibirás IDs de clase numéricos. Puedes convertirlos a `SemanticLabel` con un diccionario de mapeo:
+If you use a detection model such as *PP-DocLayout*, *DocLayNet*, or any YOLO model trained on documents, you will get numeric class IDs. You can map them to `SemanticLabel` with a dictionary:
 
 ```python
 from xycutppy import compute_order, SemanticLabel
 
-# Etiquetas típicas de un modelo YOLO de análisis de documentos
+# Typical labels from a YOLO document analysis model
 YOLO_LABEL_MAP = {
     0: 'Caption',
     1: 'Footnote',
@@ -149,7 +149,7 @@ YOLO_LABEL_MAP = {
     10: 'Title',
 }
 
-# Conversión de nombre de clase YOLO -> SemanticLabel de xycutppy
+# YOLO class name -> xycutppy SemanticLabel
 YOLO_TO_SEMANTIC = {
     'Caption':        SemanticLabel.Regular,
     'Footnote':       SemanticLabel.Regular,
@@ -169,7 +169,7 @@ def yolo_class_to_semantic(class_id: int) -> SemanticLabel:
     return YOLO_TO_SEMANTIC.get(label_name, SemanticLabel.Regular)
 
 
-# Salida típica de un modelo YOLO: lista de (class_id, x1, y1, x2, y2)
+# Typical YOLO output: list of (class_id, x1, y1, x2, y2)
 yolo_detections = [
     (5,  10.0,  0.0, 790.0,  20.0),   # Page-header  -> CrossLayout
     (10, 10.0,  30.0, 790.0,  60.0),  # Title        -> HorizontalTitle
@@ -191,13 +191,13 @@ elements = [
 
 page_bounds = (0.0, 0.0, 800.0, 1200.0)
 ordered_ids = compute_order(elements, page_bounds)
-print("Orden de lectura:", ordered_ids)
-# Esperado: header (0) -> title (1) -> col-izq (2) -> col-der (3) -> table (4) -> footnote (5) -> footer (6)
+print("Reading order:", ordered_ids)
+# Expected: header (0) -> title (1) -> left-col (2) -> right-col (3) -> table (4) -> footnote (5) -> footer (6)
 ```
 
-### Opción C: Mapeo desde etiquetas PDF nativas (Tagged PDF)
+### Option C: mapping from native PDF labels (Tagged PDF)
 
-Si extraes el documento desde una librería como `pdfplumber` o `pymupdf` y tienes acceso a los tags estructurales:
+If you extract documents from a library such as `pdfplumber` or `pymupdf` and have structural tags:
 
 ```python
 from xycutppy import compute_order, SemanticLabel
@@ -217,7 +217,7 @@ PDF_TAG_TO_SEMANTIC = {
 def pdf_tag_to_semantic(tag: str) -> SemanticLabel:
     return PDF_TAG_TO_SEMANTIC.get(tag, SemanticLabel.Regular)
 
-# Bloques extraídos de pymupdf / pdfplumber con su tag estructural
+# Blocks extracted from pymupdf / pdfplumber with structural tag
 pdf_blocks = [
     {'id': 0, 'tag': 'Header', 'x1': 0.0,   'y1': 0.0,   'x2': 595.0, 'y2': 30.0},
     {'id': 1, 'tag': 'H1',     'x1': 50.0,  'y1': 40.0,  'x2': 545.0, 'y2': 70.0},
@@ -232,15 +232,15 @@ elements = [
     for b in pdf_blocks
 ]
 
-page_bounds = (0.0, 0.0, 595.0, 842.0)  # A4 en puntos
+page_bounds = (0.0, 0.0, 595.0, 842.0)  # A4 in points
 ordered_ids = compute_order(elements, page_bounds)
-print("Orden de lectura:", ordered_ids)
+print("Reading order:", ordered_ids)
 ```
 
-## 🧠 Preguntas Frecuentes
+## 🧠 Frequently asked questions
 
-**¿Por qué mi ordenamiento falla si un encabezado tiene la etiqueta `Regular`?**
-En la implementación actual (puramente geométrica), el encabezado será detectado correctamente por la Fase 1 si su anchura supera el `DEFAULT_BETA` (por defecto 2.0 veces la anchura máxima) independientemente de su etiqueta. Si el encabezado es estrecho, bajará su coeficiente `beta`.
+**Why does ordering fail if a header has `Regular` label?**
+In the current implementation (purely geometric), the header is still detected in Stage 1 if its width exceeds `DEFAULT_BETA` (default 2.0 times max width), regardless of label. If the header is narrow, lower its `beta` coefficient.
 
-**¿Debo intentar implementar la Fase 4 (Cross-Modal Matching) del paper?**
-Como aconsejan los autores originales de DataLab: *No lo hagas a menos que uses modelos de visión artificial*. Si lees el PDF nativo, las coordenadas espaciales ya son lo suficientemente precisas. Mezclar detección geométrica con pesos semánticos sin afinar suele amplificar los errores.
+**Should I implement paper Stage 4 (Cross-Modal Matching)?**
+As advised by DataLab authors: *Do not do it unless you use vision models*. If you read native PDF, spatial coordinates are already precise enough. Mixing geometric detection with semantic weights without tuning often amplifies errors.

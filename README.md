@@ -4,52 +4,52 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/ci-cd.yml)](https://github.com/vquilonr/xycut_ppy/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20GPL--3.0--or--later-blue.svg)](LICENSE)
 
-Este proyecto proporciona un wrapper de Python con dos backends de lectura: `paper` (núcleo original GPL) y `datalab` (port nativo en Rust del módulo Apache-2.0 de Datalab). El wrapper permite seleccionar backend en tiempo de ejecución.
+This project provides a Python wrapper with two reading backends: `paper` (original GPL core) and `datalab` (native Rust port of Datalab's Apache-2.0 module). The wrapper lets you choose the backend at runtime.
 
-## ✨ Características
+## ✨ Features
 
-- **Alto rendimiento**: El núcleo del algoritmo está implementado en Rust para una máxima eficiencia.
-- **API Pythonic**: Una capa de Python limpia y bien documentada que envuelve la lógica de Rust.
-- **Configurable**: Permite ajustar los parámetros del algoritmo XYCut a través de una clase de configuración dedicada.
-- **Seguridad de tipos**: Utiliza enumeraciones para las etiquetas semánticas, evitando errores por el uso de strings.
-- **Fácil de construir y distribuir**: Utiliza `maturin` para una integración perfecta entre Rust y Python.
-- **Selección de backend**: Puedes elegir `paper` o `datalab` por llamada o como backend por defecto.
-- **Estructura multi-licencia**: El código queda separado por módulo para facilitar el cumplimiento de licencia.
+- **High performance**: The algorithm core is implemented in Rust for maximum efficiency.
+- **Pythonic API**: A clean, well-documented Python layer wrapping the Rust logic.
+- **Configurable**: Tune XYCut parameters through a dedicated configuration class.
+- **Type-safe labels**: Uses enums for semantic labels to avoid string-based errors.
+- **Easy build and distribution**: Uses `maturin` for seamless Rust/Python integration.
+- **Backend selection**: Choose `paper` or `datalab` per call or as a global default.
+- **Multi-license structure**: Code is split by module to simplify license compliance.
 
-## ⚖️ Licencias por módulo (Dual License)
+## ⚖️ Module licensing (Dual License)
 
-Este repositorio usa el esquema:
+This repository uses:
 
 `Apache-2.0 OR GPL-3.0-or-later`
 
-Cómo aplica en la práctica:
+How this applies in practice:
 
-- **Paquete pip raíz (`xycutppy`)**: se distribuye bajo **Apache-2.0**.
-- **Backend/paquete `xycutppy-paper`** (código en `src/paper/xycut_plus_plus`): se distribuye bajo **GPL-3.0-or-later**.
+- **Root pip package (`xycutppy`)**: distributed under **Apache-2.0**.
+- **`xycutppy-paper` backend/package** (code in `src/paper/xycut_plus_plus`): distributed under **GPL-3.0-or-later**.
 
-Archivos de referencia:
+Reference files:
 
-- `LICENSE` (raíz): declaración formal dual-license (`Apache-2.0 OR GPL-3.0-or-later`).
-- `src/datalab/xycut_plus_plus_sorter/LICENSE`: texto de **Apache-2.0**.
-- `src/paper/xycut_plus_plus/LICENSE`: texto de **GPL-3.0**.
+- `LICENSE` (root): formal dual-license declaration (`Apache-2.0 OR GPL-3.0-or-later`).
+- `src/datalab/xycut_plus_plus_sorter/LICENSE`: **Apache-2.0** text.
+- `src/paper/xycut_plus_plus/LICENSE`: **GPL-3.0** text.
 
-## 📦 Instalación
+## 📦 Installation
 
-Una vez publicado en PyPI, el paquete se puede instalar fácilmente con `pip`:
+Once published to PyPI, the package can be installed with `pip`:
 
 ```bash
 pip install xycutppy
 ```
 
-## 🚀 Uso Rápido (Quickstart)
+## 🚀 Quickstart
 
-A continuación se muestra un ejemplo básico de cómo utilizar el paquete para determinar el orden de lectura de un conjunto de elementos.
+Below is a basic example showing how to use the package to determine the reading order of a set of elements.
 
 ```python
 from xycutppy import compute_order, SemanticLabel, XYCutConfig, set_backend
 
-# 1. Define los elementos a ordenar.
-# Cada elemento es un diccionario con id, coordenadas (x1, y1, x2, y2) y una etiqueta.
+# 1. Define the elements to sort.
+# Each element is a dictionary with id, coordinates (x1, y1, x2, y2), and a label.
 elements = [
     {'id': 0, 'x1': 10.0, 'y1': 10.0, 'x2': 200.0, 'y2': 30.0, 'label': SemanticLabel.HorizontalTitle},
     {'id': 1, 'x1': 10.0, 'y1': 50.0, 'x2': 400.0, 'y2': 100.0, 'label': SemanticLabel.Regular},
@@ -57,94 +57,113 @@ elements = [
     {'id': 3, 'x1': 10.0, 'y1': 120.0, 'x2': 600.0, 'y2': 200.0, 'label': SemanticLabel.Regular},
 ]
 
-# 2. Define los límites de la página (x_min, y_min, x_max, y_max)
+# 2. Define page bounds (x_min, y_min, x_max, y_max)
 page_bounds = (0.0, 0.0, 800.0, 1200.0)
 
-# 3. (Opcional) Personaliza la configuración del algoritmo.
+# 3. (Optional) Customize algorithm configuration.
 custom_config = XYCutConfig(
     min_cut_threshold=10.0,
     same_row_tolerance=5.0
 )
 
-# 4. Selección de backend global (opcional).
-set_backend("paper")  # o "datalab"
+# 4. Global backend selection (optional).
+set_backend("paper")  # or "datalab"
 
-# 5. Calcula el orden de lectura.
-# Si no se pasa `config`, se usarán los valores por defecto.
+# 5. Compute reading order.
+# If `config` is not passed, defaults are used.
 ordered_ids = compute_order(elements, page_bounds, config=custom_config)
 
-# 6. O selección explícita por llamada.
+# 6. Or explicit per-call backend selection.
 ordered_ids_datalab = compute_order(elements, page_bounds, backend="datalab")
 
-print(f"El orden de lectura de los IDs es: {ordered_ids}")
-# Salida esperada: El orden de lectura de los IDs es:
+print(f"Reading order IDs: {ordered_ids}")
+# Expected output: Reading order IDs:
 ```
+
+## 🧪 Visual scenarios tests (`tests/scenarios.py`)
+
+Run the visual scenario suite to generate annotated PNG outputs for every available backend:
+
+```bash
+cd tests
+python scenarios.py
+```
+
+Generated images are saved in:
+
+```text
+tests/output_examples/
+```
+
+For a gallery with all example outputs rendered inline, see:
+
+- [tests/README.md](tests/README.md)
 
 ---
 
-## 🛠️ Guía para Desarrolladores: Compilar el Wheel desde el Código Fuente
+## 🛠️ Developer Guide: Build the Wheel from Source
 
-Esta sección describe los pasos necesarios para compilar el paquete de Python (`.whl`) a partir del código fuente.
+This section describes how to compile the Python package (`.whl`) from source code.
 
-### Prerrequisitos
+### Prerequisites
 
-Asegúrate de tener instalado el siguiente software:
+Make sure you have the following installed:
 
-1.  **Python** (versión 3.8 o superior).
-2.  **Rust**: La cadena de herramientas de Rust (incluyendo `rustc` y `cargo`). Puedes instalarla desde [rustup.rs](https://rustup.rs/).
-3.  **Maturin**: La herramienta para construir y publicar paquetes de Python escritos en Rust.
-    ```bash
-    pip install maturin
-    ```
+1. **Python** (version 3.8+).
+2. **Rust**: Rust toolchain (including `rustc` and `cargo`). Install from [rustup.rs](https://rustup.rs/).
+3. **Maturin**: Tool to build and publish Rust-based Python packages.
+   ```bash
+   pip install maturin
+   ```
 
-### Estructura del Proyecto
+### Project structure
 
-El proyecto sigue una estructura con separación por backend/licencia:
+The project follows a backend/license-separated structure:
 
 ```
 xycut_project/
-├── pyproject.toml      # Configuración del proyecto y de maturin
+├── pyproject.toml      # Project and maturin configuration
 ├── README.md
 ├── Cargo.toml
-├── LICENSE             # Declaración dual-license: Apache-2.0 OR GPL-3.0-or-later
+├── LICENSE             # Dual-license declaration: Apache-2.0 OR GPL-3.0-or-later
 ├── src/
-│   ├── lib.rs          # Módulo Python nativo (PyO3)
-│   ├── paper/xycut_plus_plus/  # Núcleo Rust GPL
+│   ├── lib.rs          # Native Python module (PyO3)
+│   ├── paper/xycut_plus_plus/  # GPL Rust core
 │   └── datalab/
 │       ├── LICENSE     # Apache-2.0
-│       └── java/       # Fuente Java original mantenida como referencia/licencia
-└── xycutppy/           # Código fuente del paquete Python
+│       └── java/       # Original Java source kept as reference/license
+└── xycutppy/           # Python package source code
     └── __init__.py
 ```
 
-### Pasos para Generar el Wheel
+### Steps to generate the wheel
 
-1.  **Clona el repositorio** (si aplica) y navega a la carpeta raíz del proyecto (`xycut_project/`).
+1. **Clone the repository** (if applicable) and move to the project root (`xycut_project/`).
 
-2.  **Crea y activa un entorno virtual** (recomendado):
-    ```bash
-    python -m venv venv
-    source venv/bin/activate  # En Linux/macOS
-    # venv\Scripts\activate   # En Windows
-    ```
+2. **Create and activate a virtual environment** (recommended):
+   ```bash
+   python -m venv venv
+   source venv/bin/activate  # Linux/macOS
+   # venv\Scripts\activate   # Windows
+   ```
 
-3.  **Compila el proyecto y genera el wheel**:
-    Ejecuta el siguiente comando de `maturin` desde la raíz del proyecto. Este comando compilará el crate de Rust en modo `release` (optimizado) y lo empaquetará junto con el wrapper de Python en un fichero `.whl`.
+3. **Build the project and generate the wheel**:
+   Run the following `maturin` command from the project root. It compiles the Rust crate in `release` mode and packages it with the Python wrapper into a `.whl` file.
 
-    ```bash
-    maturin build --release
-    ```
-    
-    El wheel generado se guardará en la carpeta `target/wheels/`.
+   ```bash
+   maturin build --release
+   ```
 
-    > **Consejo**: Durante el desarrollo, puedes usar `maturin develop` para compilar e instalar el paquete en tu entorno virtual actual. Esto es más rápido ya que evita el paso de empaquetado y permite probar los cambios inmediatamente.
+   The generated wheel is stored in `target/wheels/`.
 
-4.  **Instala el wheel localmente para probarlo**:
-    Puedes instalar el fichero `.whl` que acabas de crear usando `pip`:
+   > **Tip**: During development, you can run `maturin develop` to build and install into the active virtual environment. It is faster because it skips packaging and lets you test changes immediately.
 
-    ```bash
-    # El nombre exacto del fichero puede variar según tu sistema operativo y versión de Python
-    pip install target/wheels/xycutppy-0.0.2-*.whl
-    ```
+4. **Install the wheel locally for testing**:
+   Install the `.whl` you just created with `pip`:
 
-¡Y eso es todo! Ahora tienes un paquete de Python instalado localmente, listo para ser probado o distribuido.
+   ```bash
+   # Exact filename may vary by OS and Python version
+   pip install target/wheels/xycutppy-0.0.2-*.whl
+   ```
+
+That's it. You now have a locally installed Python package ready for testing or distribution.

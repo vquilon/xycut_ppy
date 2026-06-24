@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple, Literal, cast
 
 # Exportamos las clases principales del core de Rust
 from xycutppy._xycutpp_core import (
@@ -24,6 +24,16 @@ from xycutppy._xycutpp_core import (
 from xycutppy.backends import datalab, paper
 
 # --- REGISTRO DINÁMICO DE BACKENDS ---
+
+Backend = Literal["paper", "datalab"]
+
+
+def _parse_backend(value: str) -> Backend:
+    v = value.strip().lower()
+    if v not in ("paper", "datalab"):
+        raise ValueError(f"Backend inválido: {value}")
+    return cast(Backend, v)
+
 _BACKENDS = {
     "datalab": datalab,
     "paper": paper,
@@ -34,18 +44,18 @@ _AVAILABLE_BACKENDS = {
     name: mod for name, mod in _BACKENDS.items() if mod.is_available()
 }
 
-_DEFAULT_BACKEND = os.environ.get("XYCUTPPY_BACKEND", "paper").strip().lower()
+_DEFAULT_BACKEND: Backend = _parse_backend(os.environ.get("XYCUTPPY_BACKEND", "paper").strip().lower())
 
 # Fallback de seguridad: si piden 'paper' pero instalaron la versión opensource (datalab),
 # o si el valor de entorno es inválido, forzamos al primer backend disponible.
 if _DEFAULT_BACKEND not in _AVAILABLE_BACKENDS:
-    _DEFAULT_BACKEND = next(iter(_AVAILABLE_BACKENDS.keys()), "datalab")
+    _DEFAULT_BACKEND = _parse_backend(next(iter(_AVAILABLE_BACKENDS.keys()), "datalab"))
 
 logging.getLogger("xycutppy").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
-def configure_logging(log_level: int, backend: Optional[str] = None) -> None:
+def configure_logging(log_level: int, backend: Optional[Backend] = None) -> None:
     """Configura el nivel de logging para xycutppy y sus backends de Rust.
 
     Establece el nivel en toda la jerarquía ``xycutppy.*`` y resetea la caché
@@ -80,12 +90,12 @@ def configure_logging(log_level: int, backend: Optional[str] = None) -> None:
     reset_log_cache()
 
 
-def available_backends() -> List[str]:
+def available_backends() -> List[Backend]:
     """Devuelve una lista con los nombres de los backends instalados y listos para usar."""
-    return list(_AVAILABLE_BACKENDS.keys())
+    return [_parse_backend(name) for name in _AVAILABLE_BACKENDS.keys()]
 
 
-def set_backend(backend: str) -> None:
+def set_backend(backend: Backend) -> None:
     """Configura el backend global por defecto."""
     global _DEFAULT_BACKEND
     backend_name = backend.strip().lower()
@@ -99,10 +109,10 @@ def set_backend(backend: str) -> None:
             )
         raise ValueError(f"Backend invalido: {backend}. Use uno de: {list(_AVAILABLE_BACKENDS.keys())}.")
 
-    _DEFAULT_BACKEND = backend_name
+    _DEFAULT_BACKEND = _parse_backend(backend_name)
 
 
-def get_backend() -> str:
+def get_backend() -> Backend:
     """Obtiene el nombre del backend global configurado actualmente."""
     return _DEFAULT_BACKEND
 

@@ -130,11 +130,11 @@ logger.info("===================================================================
 # Configuración básica del logger nativo de Python
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 
-backends_disponibles = available_backends()
-logger.info(f"Backends detectados e instalados en este sistema: {backends_disponibles}")
+available_backends = available_backends()
+logger.info(f"Backends detectados e instalados en este sistema: {available_backends}")
 
 # Probamos a ejecutar una llamada cambiando niveles de loggers para ver cómo interactúa con Rust
-for b in backends_disponibles:
+for b in available_backends:
     logger.info(f"\n--> Probando comportamiento de logs con Backend: '{b.upper()}'")
 
     # Caso A: Sin logs (Nivel por defecto o Warning)
@@ -159,7 +159,7 @@ configure_logging(logging.INFO)
 page_dimensions = (0.0, 0.0, 800.0, 1000.0)
 
 # ESCENARIO 1: Artículo Científico Estándar (Título completo + Doble Columna + Pie de Página)
-elementos_paper = [
+paper_elements = [
     {'id': 10, 'x1': 50., 'y1': 40., 'x2': 750., 'y2': 60., 'yolo_label': 'Page-header'},
     {'id': 1, 'x1': 100., 'y1': 100., 'x2': 700., 'y2': 150., 'yolo_label': 'Title'},
 
@@ -177,7 +177,7 @@ elementos_paper = [
 ]
 
 # ESCENARIO 2: Layout Complejo de Periódico / Revista (Layout denso con imágenes cruzadas y tablas)
-elementos_news = [
+new_elements = [
     {'id': 1, 'x1': 50., 'y1': 50., 'x2': 750., 'y2': 120., 'yolo_label': 'Title'},
 
     # Sección A: Título de columna izquierda que abre paso a un texto
@@ -197,9 +197,9 @@ elementos_news = [
     {'id': 9, 'x1': 540., 'y1': 710., 'x2': 750., 'y2': 900., 'yolo_label': 'Text'},
 ]
 
-escenarios = [
-    ("layout_academic_paper.png", elementos_paper),
-    ("layout_dense_newspaper.png", elementos_news)
+scenarios = [
+    ("layout_academic_paper.png", paper_elements),
+    ("layout_dense_newspaper.png", new_elements)
 ]
 
 # Configuración personalizada de tolerancias matemáticas para procesar los escenarios
@@ -213,10 +213,10 @@ logger.info("\n=================================================================
 logger.info(" PROCESANDO ESCENARIOS ESTRUCTURALES Y GENERANDO MAPAS VISUALES ")
 logger.info("======================================================================")
 
-for b in backends_disponibles:
+for b in available_backends:
     logger.info(f"\nEjecutando suite de layouts sobre el backend: '{b.upper()}'")
 
-    for filename_base, raw_elements in escenarios:
+    for filename_base, raw_elements in scenarios:
         # Preparamos los elementos inyectando el Enum SemanticLabel correspondiente mapeado desde YOLO
         processed_elements = []
         for e in raw_elements:
