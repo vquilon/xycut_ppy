@@ -1,0 +1,17 @@
+SPDX-License-Identifier: Apache-2.0 OR GPL-3.0-or-later
+
+XYCut++ Python Wrapper (xycutppy) is available under a dual-license model:
+
+Apache-2.0 OR GPL-3.0-or-later
+
+You may choose either license, according to your distribution/use case.
+
+Practical scope in this repository:
+
+1. The root pip package (`xycutppy`) is distributed under Apache-2.0.
+2. The `xycutppy-paper` backend (code under `src/paper/xycut_plus_plus`) is distributed under GPL-3.0-or-later.
+
+Full license texts are provided in:
+
+- `src/datalab/xycut_plus_plus_sorter/LICENSE` (Apache License 2.0)
+- `src/paper/xycut_plus_plus/LICENSE` (GNU GPL v3)
