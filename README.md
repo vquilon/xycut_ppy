@@ -1,7 +1,7 @@
-# XYCut++ Python Wrapper (xycutpp)
+# XYCut++ Python Wrapper (xycutppy)
 
-[![PyPI version](https://img.shields.io/pypi/v/xycutpp.svg)](https://pypi.org/project/xycutppy/)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/main.yml)](https://github.com/vquilonr/xycut_ppy/actions)
+[![PyPI version](https://img.shields.io/pypi/v/xycutppy.svg)](https://pypi.org/project/xycutppy/)
+[![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/ci-cd.yml)](https://github.com/vquilonr/xycut_ppy/actions)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20GPL--3.0--or--later-blue.svg)](LICENSE)
 
 Este proyecto proporciona un wrapper de Python con dos backends de lectura: `paper` (núcleo original GPL) y `datalab` (port nativo en Rust del módulo Apache-2.0 de Datalab). El wrapper permite seleccionar backend en tiempo de ejecución.
@@ -38,7 +38,7 @@ Archivos de referencia:
 Una vez publicado en PyPI, el paquete se puede instalar fácilmente con `pip`:
 
 ```bash
-pip install xycutpp
+pip install xycutppy
 ```
 
 ## 🚀 Uso Rápido (Quickstart)
