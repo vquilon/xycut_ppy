@@ -2,21 +2,32 @@
 name = "xycutpp_core"  # Nombre interno del crate de Rust
 version = "0.1.0"
 edition = "2021"
+license = "Apache-2.0"
 
 [lib]
 name = "xycutpp_core"  # El nombre que se usará para el módulo nativo compilado
 crate-type = ["cdylib"]
 
 [dependencies]
+# Datalab (Apache 2.0) va siempre por defecto
+xycut-plus-plus-sorter = { path = "src/datalab/xycut_plus_plus_sorter" }
+
+# Paper (GPL3) es opcional — solo se compila con --features paper
 # xycut-plus-plus = "^0.0.2"
-xycut-plus-plus = { path = "src/xycut_plus_plus" }
+xycut-plus-plus = { path = "src/paper/xycut_plus_plus", optional = true }
 
 pyo3 = { version = "0.28.3", features = ["extension-module"] }
 log = "0.4"
 pyo3-log = "0.13.3"
 
+[features]
+default = []                        # Sin paper → paquete Apache 2.0
+paper = ["xycut-plus-plus"]         # Activa el código GPL3
+
+# ¡Muy importante para un algoritmo recursivo y matemático!
 [profile.release]
-codegen-units = 1
-lto = true
-opt-level = 3
+opt-level = 3        # Máxima optimización de velocidad
 strip = true
+lto = true           # Link Time Optimization (fusiona código para que vaya más rápido)
+codegen-units = 1    # Compila más lento, pero el binario resultante es más rápido
+panic = "abort"      # Reduce el tamaño del binario quitando la info de unwinding

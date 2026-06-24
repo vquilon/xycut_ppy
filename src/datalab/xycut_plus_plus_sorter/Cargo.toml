@@ -1,0 +1,10 @@
+[package]
+name = "xycut-plus-plus-sorter"
+version = "0.1.0"
+edition = "2021"
+description = "A Rust port of the XY-Cut++ algorithm for PDF reading order detection"
+keywords = ["pdf", "ocr", "layout-analysis", "xy-cut"]
+license-file = "LICENSE"
+
+[dependencies]
+log = "0.4"

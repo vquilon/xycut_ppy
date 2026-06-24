@@ -4,7 +4,7 @@
 [![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/main.yml)](https://github.com/vquilonr/xycut_ppy/actions)
 [![License](https://img.shields.io/crates/l/xycut-plus-plus.svg)](LICENSE)
 
-Este proyecto proporciona un wrapper de Python de alto rendimiento para el crate de Rust [`xycut-plus-plus`](https://lib.rs/crates/xycut-plus-plus). El paquete permite calcular el orden de lectura de un conjunto de elementos (bounding boxes) en una página, utilizando la velocidad y seguridad de Rust con una API Pythonic y fácil de usar.
+Este proyecto proporciona un wrapper de Python con dos backends de lectura: `paper` (núcleo original GPL) y `datalab` (port nativo en Rust del módulo Apache-2.0 de Datalab). El wrapper permite seleccionar backend en tiempo de ejecución.
 
 ## ✨ Características
 
@@ -13,6 +13,13 @@ Este proyecto proporciona un wrapper de Python de alto rendimiento para el crate
 - **Configurable**: Permite ajustar los parámetros del algoritmo XYCut a través de una clase de configuración dedicada.
 - **Seguridad de tipos**: Utiliza enumeraciones para las etiquetas semánticas, evitando errores por el uso de strings.
 - **Fácil de construir y distribuir**: Utiliza `maturin` para una integración perfecta entre Rust y Python.
+- **Selección de backend**: Puedes elegir `paper` o `datalab` por llamada o como backend por defecto.
+- **Estructura multi-licencia**: El código queda separado por módulo para facilitar el cumplimiento de licencia.
+
+## ⚖️ Licencias por módulo
+
+- `LICENSE` (raíz): GPL-3.0 para el backend `paper`.
+- `src/datalab/LICENSE`: Apache-2.0 para el módulo `datalab`.
 
 ## 📦 Instalación
 
@@ -27,7 +34,7 @@ pip install xycutpp
 A continuación se muestra un ejemplo básico de cómo utilizar el paquete para determinar el orden de lectura de un conjunto de elementos.
 
 ```python
-from xycutpp import compute_order, SemanticLabel, XYCutConfig
+from xycutppy import compute_order, SemanticLabel, XYCutConfig, set_backend
 
 # 1. Define los elementos a ordenar.
 # Cada elemento es un diccionario con id, coordenadas (x1, y1, x2, y2) y una etiqueta.
@@ -47,9 +54,15 @@ custom_config = XYCutConfig(
     same_row_tolerance=5.0
 )
 
-# 4. Calcula el orden de lectura.
+# 4. Selección de backend global (opcional).
+set_backend("paper")  # o "datalab"
+
+# 5. Calcula el orden de lectura.
 # Si no se pasa `config`, se usarán los valores por defecto.
 ordered_ids = compute_order(elements, page_bounds, config=custom_config)
+
+# 6. O selección explícita por llamada.
+ordered_ids_datalab = compute_order(elements, page_bounds, backend="datalab")
 
 print(f"El orden de lectura de los IDs es: {ordered_ids}")
 # Salida esperada: El orden de lectura de los IDs es:
@@ -74,17 +87,22 @@ Asegúrate de tener instalado el siguiente software:
 
 ### Estructura del Proyecto
 
-El proyecto sigue una estructura que separa claramente el código de Rust y el de Python:
+El proyecto sigue una estructura con separación por backend/licencia:
 
 ```
 xycut_project/
 ├── pyproject.toml      # Configuración del proyecto y de maturin
 ├── README.md
 ├── Cargo.toml
-├── src/                # Código fuente del núcleo en Rust
-│   └── lib.rs
+├── LICENSE             # GPL-3.0 (backend paper)
+├── src/
+│   ├── lib.rs          # Módulo Python nativo (PyO3)
+│   ├── paper/xycut_plus_plus/  # Núcleo Rust GPL
+│   └── datalab/
+│       ├── LICENSE     # Apache-2.0
+│       └── java/       # Fuente Java original mantenida como referencia/licencia
 └── xycutppy/           # Código fuente del paquete Python
-        └── __init__.py
+    └── __init__.py
 ```
 
 ### Pasos para Generar el Wheel

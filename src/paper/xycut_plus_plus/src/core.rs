@@ -61,6 +61,7 @@ impl XYCutPlusPlus {
             || page_height <= 0.0
         {
             tracing::warn!(
+                target: "xycutppy::paper",
                 "Invalid page dimensions ({}, {})",
                 page_width, page_height
             );
@@ -139,12 +140,14 @@ impl XYCutPlusPlus {
             // Try vertical cut first for multi-column layouts
             if let Some(x_cut) = self.find_vertical_cut(elements, x_min, x_max) {
                 tracing::debug!(
+                    target: "xycutppy::paper",
                     "[XYCut] Vertical cut at x={:.0}, splitting {} elements (multi-column)",
                     x_cut,
                     elements.len()
                 );
                 let (left, right) = self.split_vertical(elements, x_cut);
                 tracing::debug!(
+                    target: "xycutppy::paper",
                     "  Left: {} elements, Right: {} elements",
                     left.len(),
                     right.len()
@@ -159,12 +162,14 @@ impl XYCutPlusPlus {
         // Try horizontal cut first (top-to-bottom reading)
         if let Some(y_cut) = self.find_horizontal_cut(elements, y_min, y_max) {
             tracing::debug!(
+                target: "xycutppy::paper",
                 "[XYCut] Horizontal cut at y={:.0}, splitting {} elements",
                 y_cut,
                 elements.len()
             );
             let (top, bottom) = self.split_horizontal(elements, y_cut);
             tracing::debug!(
+                target: "xycutppy::paper",
                 "  Top: {} elements, Bottom: {} elements",
                 top.len(),
                 bottom.len()
@@ -178,12 +183,14 @@ impl XYCutPlusPlus {
         // Try vertical cut (left-to-right for multi-column)
         if let Some(x_cut) = self.find_vertical_cut(elements, x_min, x_max) {
             tracing::debug!(
+                target: "xycutppy::paper",
                 "[XYCut] Vertical cut at x={:.0}, splitting {} elements",
                 x_cut,
                 elements.len()
             );
             let (left, right) = self.split_vertical(elements, x_cut);
             tracing::debug!(
+                target: "xycutppy::paper",
                 "  Left: {} elements, Right: {} elements",
                 left.len(),
                 right.len()
@@ -196,6 +203,7 @@ impl XYCutPlusPlus {
 
         // No valid cuts found - sort by position
         tracing::debug!(
+            target: "xycutppy::paper",
             "[XYCut] No cuts found, sorting {} elements by position",
             elements.len()
         );
@@ -243,6 +251,7 @@ impl XYCutPlusPlus {
         // Debug: show histogram for large element counts
         if elements.len() > 15 {
             tracing::debug!(
+                target: "xycutppy::paper",
                 "[Histogram] Vertical: {} bins, min_gap={}, x_range={:.0}-{:.0}",
                 resolution, min_gap_bins, x_min, x_max
             );
@@ -253,6 +262,7 @@ impl XYCutPlusPlus {
             let x_coord = x_min + (bin_index as f32 / resolution as f32) * (x_max - x_min);
             if elements.len() > 15 {
                 tracing::debug!(
+                    target: "xycutppy::paper",
                     "[Histogram] Found gap at bin {}, x={:.0}",
                     bin_index, x_coord
                 );
@@ -391,6 +401,7 @@ impl XYCutPlusPlus {
 
                 if let Some(position) = best_position {
                     tracing::debug!(
+                        target: "xycutppy::paper",
                         "[INSERT] Masked element {} ({:?}) -> position {} (before element {})",
                         masked.id(),
                         masked.semantic_label(),
@@ -401,6 +412,7 @@ impl XYCutPlusPlus {
                 } else {
                     // No valid match found - append to end as a fallback
                     tracing::warn!(
+                        target: "xycutppy::paper",
                         "No valid insertion for element {} ({:?}), appending",
                         masked.id(),
                         masked.semantic_label()

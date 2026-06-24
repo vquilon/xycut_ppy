@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import typing
 from enum import Enum
-from typing import List, Dict, Any, Tuple, Optional, Final
+from typing import Any, Dict, Final, List, Literal, Optional, Tuple
 
 
 # Stub para la clase XYCutConfig
@@ -34,6 +34,7 @@ class SemanticLabel(Enum):
     Vision: Final[SemanticLabel]
     Regular: Final[SemanticLabel]
 
+
 @typing.final
 class Element:
     id: str
@@ -56,11 +57,20 @@ class Element:
     ) -> None: ...
 
 
-# 3. Stub para la función principal compute_order
+Backend = Literal["paper", "datalab"]
+
+
+def set_backend(backend: Backend) -> None: ...
+
+
+def configure_logging(log_level: int, backend: Optional[str] = None) -> None: ...
+
+
+def reset_log_cache() -> None: ...
 # Esta firma debe coincidir con la de la función "fachada" en tu __init__.py.
 def compute_order(
     elements: List[Dict[str, Any]],
     page_bounds: Tuple[float, float, float, float],
     config: Optional[XYCutConfig] = None,
+    backend: Optional[Backend] = None,
 ) -> List[int]: ...
-
