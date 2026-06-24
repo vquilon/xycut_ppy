@@ -54,7 +54,16 @@ jobs:
         python-version: ${{ matrix.python-version }}
         architecture: ${{ matrix.job.python-architecture }}
 
-    - name: Build wheel with Maturin
+    - name: Build wheel with Maturin (Ubuntu alias)
+      if: startsWith(matrix.job.os, 'ubuntu')
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.job.target }}
+        args: --release --out dist --interpreter "python${{ matrix.python-version }}"
+        manylinux: auto
+
+    - name: Build wheel with Maturin (non-Ubuntu path)
+      if: ${{ !startsWith(matrix.job.os, 'ubuntu') }}
       uses: PyO3/maturin-action@v1
       with:
         target: ${{ matrix.job.target }}

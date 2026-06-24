@@ -76,11 +76,20 @@ jobs:
                 encoding="utf-8",
             )
 
-    - name: Build wheel with Maturin (paper feature)
+    - name: Build wheel with Maturin (paper, Ubuntu alias)
+      if: startsWith(matrix.job.os, 'ubuntu')
       uses: PyO3/maturin-action@v1
       with:
         target: ${{ matrix.job.target }}
         # IMPORTANTE: Mantenemos la feature 'paper'
+        args: --release --features paper --out dist --interpreter "python${{ matrix.python-version }}"
+        manylinux: auto
+
+    - name: Build wheel with Maturin (paper, non-Ubuntu path)
+      if: ${{ !startsWith(matrix.job.os, 'ubuntu') }}
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.job.target }}
         args: --release --features paper --out dist --interpreter "${{ steps.setup-python.outputs.python-path }}"
         manylinux: auto
 
