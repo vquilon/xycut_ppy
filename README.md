@@ -1,7 +1,8 @@
 # XYCut++ Python Wrapper (xycutppy)
 
 [![PyPI version](https://img.shields.io/pypi/v/xycutppy.svg)](https://pypi.org/project/xycutppy/)
-[![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/ci-cd.yml)](https://github.com/vquilonr/xycut_ppy/actions)
+[![Publish xycutppy to PyPI](https://github.com/vquilon/xycut_ppy/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/vquilon/xycut_ppy/actions/workflows/ci-cd.yml)
+[![Publish xycutppy-paper to PyPI](https://github.com/vquilon/xycut_ppy/actions/workflows/ci-cd-paper.yml/badge.svg)](https://github.com/vquilon/xycut_ppy/actions/workflows/ci-cd-paper.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20GPL--3.0--or--later-blue.svg)](LICENSE)
 
 This project provides a Python wrapper with two reading backends: `paper` (original GPL core) and `datalab` (native Rust port of Datalab's Apache-2.0 module). The wrapper lets you choose the backend at runtime.
