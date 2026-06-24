@@ -58,8 +58,9 @@ impl Bounds {
         Self {
             left: element.x1.min(element.x2),
             right: element.x1.max(element.x2),
-            bottom: element.y1.min(element.y2),
-            top: element.y1.max(element.y2),
+            // INVERSIÓN: En imágenes, el Y menor es "Arriba" y el Y mayor es "Abajo"
+            top: element.y1.min(element.y2),
+            bottom: element.y1.max(element.y2),
         }
     }
     fn width(self) -> f32 {
@@ -375,9 +376,8 @@ fn find_best_horizontal_cut_with_projection(objects: &[Element]) -> CutInfo {
     sorted.sort_by(|a, b| {
         let ab = Bounds::from_element(*a);
         let bb = Bounds::from_element(*b);
-        (-ab.top)
-            .total_cmp(&-bb.top)
-            .then_with(|| (-ab.bottom).total_cmp(&-bb.bottom))
+        // Orden natural ascendente
+        ab.top.total_cmp(&bb.top).then_with(|| ab.bottom.total_cmp(&bb.bottom))
     });
 
     let mut largest_gap = 0.0_f32;
@@ -387,14 +387,16 @@ fn find_best_horizontal_cut_with_projection(objects: &[Element]) -> CutInfo {
     for obj in &sorted {
         let bounds = Bounds::from_element(*obj);
         if let Some(prev) = prev_bottom {
-            if prev > bounds.top {
-                let gap = prev - bounds.top;
+            // Si el inicio de la siguiente caja es mayor que el fin de la anterior, hay hueco
+            if bounds.top > prev {
+                let gap = bounds.top - prev;
                 if gap > largest_gap {
                     largest_gap = gap;
                     cut_position = (prev + bounds.top) / 2.0;
                 }
             }
-            prev_bottom = Some(prev.min(bounds.bottom));
+            // Acumulamos el valor Y más profundo (más abajo) que hemos visto
+            prev_bottom = Some(prev.max(bounds.bottom));
         } else {
             prev_bottom = Some(bounds.bottom);
         }
@@ -413,7 +415,8 @@ fn split_by_horizontal_cut(objects: &[Element], cut_y: f32) -> Vec<Vec<Element>>
 
     for obj in objects {
         let (_, center_y) = obj.center();
-        if center_y > cut_y {
+        // INVERSIÓN: Si Y es MENOR que el corte, está visualmente por encima (above)
+        if center_y < cut_y {
             above.push(obj.clone());
         } else {
             below.push(obj.clone());
@@ -483,7 +486,9 @@ fn merge_cross_layout_elements(sorted_main: &[Element], cross_layout_elements: &
         } else {
             let main_top = Bounds::from_element(&sorted_main[main_index]).top;
             let cross_top = Bounds::from_element(&sorted_cross_layout[cross_index]).top;
-            if cross_top >= main_top {
+
+            // INVERSIÓN: <= significa que el elemento cruzado está más arriba en la imagen
+            if cross_top <= main_top {
                 result.push(sorted_cross_layout[cross_index].clone());
                 cross_index += 1;
             } else {
@@ -505,8 +510,9 @@ fn sort_by_y_then_x(objects: &[Element]) -> Vec<Element> {
     sorted.sort_by(|a, b| {
         let ab = Bounds::from_element(a);
         let bb = Bounds::from_element(b);
-        (-ab.top)
-            .total_cmp(&-bb.top)
+        // Quitamos los signos negativos. Ordenamos Y menor a mayor, luego X menor a mayor
+        ab.top
+            .total_cmp(&bb.top)
             .then_with(|| ab.left.total_cmp(&bb.left))
     });
     sorted
