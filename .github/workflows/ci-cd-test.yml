@@ -1,4 +1,4 @@
-name: Publish xycutppy to PyPI
+name: Publish xycutppy to TestPyPI
 
 on:
   release:

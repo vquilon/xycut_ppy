@@ -1,4 +1,4 @@
-name: Publish xycutppy-paper to PyPI
+name: Publish xycutppy-paper to TestPyPI
 
 # Se ejecutará cuando crees una Release en GitHub
 on:
