@@ -1,9 +1,9 @@
-name: Publish xycutppy-paper to PyPI
+name: Publish xycutppy to PyPI
 
-# Se ejecutará cuando crees una Release en GitHub
 on:
   release:
     types: [published]
+  # 1. AÑADE ESTO: Permite ejecutar el workflow manualmente con un botón
   workflow_dispatch:
 
 jobs:
@@ -13,9 +13,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 1. Definimos las versiones de Python (3.10 a 3.14)
+        # 1. Definimos el array con las versiones de Python
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
-        # 2. Definimos las combinaciones OS/Target bajo 'job'
+        # 2. Definimos el array con las combinaciones de OS y Target
         job:
           # --- LINUX ---
           - os: ubuntu-latest
@@ -34,14 +34,15 @@ jobs:
             python-architecture: x86
 
           # --- macOS ---
-          - os: macos-13  # Intel
+          - os: macos-13  # Arquitectura Intel
             target: x86_64-apple-darwin
             python-architecture: x64
-          - os: macos-latest  # Apple Silicon (M1/M2/M3)
+          - os: macos-latest  # Arquitectura Apple Silicon (M1/M2/M3)
             target: aarch64-apple-darwin
             python-architecture: arm64
 
     steps:
+    # Usamos las versiones estables más recientes de las actions
     - uses: actions/checkout@v7
       with:
         persist-credentials: false
@@ -53,49 +54,29 @@ jobs:
         python-version: ${{ matrix.python-version }}
         architecture: ${{ matrix.job.python-architecture }}
 
-    # Usamos shell: python. Es 100% seguro en Windows, macOS y Linux.
-    - name: Patch metadata for Original Paper release
-      shell: python
-      run: |
-        from pathlib import Path
-        
-        pyproject = Path("pyproject.toml")
-        if pyproject.exists():
-            pyproject.write_text(
-                pyproject.read_text(encoding="utf-8")
-                .replace('name = "xycutppy"', 'name = "xycutppy-paper"')
-                .replace('license = "Apache-2.0"', 'license = "GPL-3.0"'),
-                encoding="utf-8",
-            )
-            
-        cargo = Path("Cargo.toml")
-        if cargo.exists():
-            cargo.write_text(
-                cargo.read_text(encoding="utf-8").replace('license = "Apache-2.0"', 'license = "GPL-3.0"'),
-                encoding="utf-8",
-            )
-
-    - name: Build wheel with Maturin (paper feature)
+    - name: Build wheel with Maturin
       uses: PyO3/maturin-action@v1
       with:
         target: ${{ matrix.job.target }}
-        # IMPORTANTE: Mantenemos la feature 'paper'
-        args: --release --features paper --out dist --interpreter "${{ steps.setup-python.outputs.python-path }}"
+        # Al especificar el interpreter, Maturin compilará solo para esa versión de Python
+        args: --release --out dist --interpreter "${{ steps.setup-python.outputs.python-path }}"
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:
-        # Añadido .job. para extraer la variable correctamente del nuevo formato de matriz
-        name: python-package-distributions-paper-${{ matrix.job.os }}-${{ matrix.job.target }}-py${{ matrix.python-version }}
+        # Añadimos el python-version al nombre para que los artefactos no se sobrescriban
+        name: python-package-distributions-${{ matrix.job.os }}-${{ matrix.job.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
-  publish-to-pypi:
-    name: Publish Python 🐍 distribution 📦 to PyPI
-    needs: build
+
+  publish-to-testpypi:
+    name: Publish Python 🐍 distribution 📦 to TestPyPI
+    needs:
+    - build
     runs-on: ubuntu-latest
     environment:
-      name: pypi
-      url: https://pypi.org/p/xycutppy-paper
+      name: testpypi
+      url: https://test.pypi.org/p/xycutppy
 
     permissions:
       id-token: write
@@ -104,11 +85,12 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v8
       with:
-        pattern: python-package-distributions-paper-*
+        pattern: python-package-distributions-*
         merge-multiple: true
         path: dist/
 
-    - name: Publish distribution 📦 to PyPI
+    - name: Publish distribution 📦 to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
+        repository-url: https://test.pypi.org/legacy/
         skip-existing: true

@@ -4,6 +4,7 @@ name: Publish xycutppy-paper to PyPI
 on:
   release:
     types: [published]
+  # 1. AÑADE ESTO: Permite ejecutar el workflow manualmente con un botón
   workflow_dispatch:
 
 jobs:
@@ -89,13 +90,13 @@ jobs:
         name: python-package-distributions-paper-${{ matrix.job.os }}-${{ matrix.job.target }}-py${{ matrix.python-version }}
         path: dist/*.whl
 
-  publish-to-pypi:
-    name: Publish Python 🐍 distribution 📦 to PyPI
+  publish-to-testpypi:
+    name: Publish Python 🐍 distribution 📦 to TestPyPI
     needs: build
     runs-on: ubuntu-latest
     environment:
-      name: pypi
-      url: https://pypi.org/p/xycutppy-paper
+      name: testpypi
+      url: https://test.pypi.org/p/xycutppy-paper
 
     permissions:
       id-token: write
@@ -108,7 +109,8 @@ jobs:
         merge-multiple: true
         path: dist/
 
-    - name: Publish distribution 📦 to PyPI
+    - name: Publish distribution 📦 to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
+        repository-url: https://test.pypi.org/legacy/
         skip-existing: true
