@@ -7,8 +7,21 @@ on:
 
 jobs:
   build:
-    name: Build distribution 📦
-    runs-on: ubuntu-latest
+    name: Build ${{ matrix.os }} | ${{ matrix.target }} | py${{ matrix.python-version }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: windows-latest
+            target: i686-pc-windows-msvc
 
     steps:
     # Usamos las versiones estables más recientes de las actions (v4/v5)
@@ -19,29 +32,38 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: ">=3.10"
-
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install maturin
+        python-version: ${{ matrix.python-version }}
 
     # Modificamos los manifiestos al vuelo: nombre y licencia
     - name: Patch metadata for Original Paper release
       run: |
-        sed -i 's/name = "xycutppy"/name = "xycutppy-paper"/' pyproject.toml
-        sed -i 's/license = "Apache-2.0"/license = "GPL-3.0"/' pyproject.toml
-        sed -i 's/license = "Apache-2.0"/license = "GPL-3.0"/' Cargo.toml
+        python - <<'PY'
+        from pathlib import Path
+        pyproject = Path("pyproject.toml")
+        cargo = Path("Cargo.toml")
+        pyproject.write_text(
+            pyproject.read_text(encoding="utf-8")
+            .replace('name = "xycutppy"', 'name = "xycutppy-paper"')
+            .replace('license = "Apache-2.0"', 'license = "GPL-3.0"'),
+            encoding="utf-8",
+        )
+        cargo.write_text(
+            cargo.read_text(encoding="utf-8").replace('license = "Apache-2.0"', 'license = "GPL-3.0"'),
+            encoding="utf-8",
+        )
+        PY
 
     - name: Build wheel with Maturin (paper feature)
-      # Cambiamos la salida a "dist/" para estandarizarlo con las acciones de PyPA
-      run: maturin build --release --features paper --out dist/
+      uses: PyO3/maturin-action@v1
+      with:
+        target: ${{ matrix.target }}
+        args: --release --features paper --out dist --interpreter python
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
-        name: python-package-distributions-paper
-        path: dist/
+        name: python-package-distributions-paper-${{ matrix.os }}-${{ matrix.target }}-py${{ matrix.python-version }}
+        path: dist/*.whl
 
   publish-to-pypi:
     name: Publish Python 🐍 distribution 📦 to PyPI
@@ -59,11 +81,14 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: python-package-distributions-paper
+        pattern: python-package-distributions-paper-*
+        merge-multiple: true
         path: dist/
 
     - name: Publish distribution 📦 to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        skip-existing: true
 
   # Opcional: Publicar en TestPyPI.
   publish-to-testpypi:
@@ -82,10 +107,12 @@ jobs:
     - name: Download all the dists
       uses: actions/download-artifact@v4
       with:
-        name: python-package-distributions-paper
+        pattern: python-package-distributions-paper-*
+        merge-multiple: true
         path: dist/
 
     - name: Publish distribution 📦 to TestPyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
