@@ -81,7 +81,8 @@ jobs:
       with:
         target: ${{ matrix.job.target }}
         # IMPORTANTE: Mantenemos la feature 'paper'
-        args: --release --features paper --out dist --interpreter "${{ steps.setup-python.outputs.python-path }}"
+        args: --release --features paper --out dist --find-interpreter
+        manylinux: auto
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
