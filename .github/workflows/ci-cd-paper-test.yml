@@ -35,10 +35,10 @@ jobs:
             python-architecture: x86
 
           # --- macOS ---
-          - os: macos-13  # Intel
+          - os: macos-26-intel  # Intel
             target: x86_64-apple-darwin
             python-architecture: x64
-          - os: macos-latest  # Apple Silicon (M1/M2/M3)
+          - os: macos-26  # Apple Silicon (M1/M2/M3)
             target: aarch64-apple-darwin
             python-architecture: arm64
 
