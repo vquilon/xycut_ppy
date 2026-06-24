@@ -2,7 +2,7 @@
 
 [![PyPI version](https://img.shields.io/pypi/v/xycutpp.svg)](https://pypi.org/project/xycutppy/)
 [![Build Status](https://img.shields.io/github/actions/workflow/status/vquilonr/xycut_ppy/main.yml)](https://github.com/vquilonr/xycut_ppy/actions)
-[![License](https://img.shields.io/crates/l/xycut-plus-plus.svg)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache--2.0%20OR%20GPL--3.0--or--later-blue.svg)](LICENSE)
 
 Este proyecto proporciona un wrapper de Python con dos backends de lectura: `paper` (núcleo original GPL) y `datalab` (port nativo en Rust del módulo Apache-2.0 de Datalab). El wrapper permite seleccionar backend en tiempo de ejecución.
 
@@ -16,10 +16,22 @@ Este proyecto proporciona un wrapper de Python con dos backends de lectura: `pap
 - **Selección de backend**: Puedes elegir `paper` o `datalab` por llamada o como backend por defecto.
 - **Estructura multi-licencia**: El código queda separado por módulo para facilitar el cumplimiento de licencia.
 
-## ⚖️ Licencias por módulo
+## ⚖️ Licencias por módulo (Dual License)
 
-- `LICENSE` (raíz): GPL-3.0 para el backend `paper`.
-- `src/datalab/LICENSE`: Apache-2.0 para el módulo `datalab`.
+Este repositorio usa el esquema:
+
+`Apache-2.0 OR GPL-3.0-or-later`
+
+Cómo aplica en la práctica:
+
+- **Paquete pip raíz (`xycutppy`)**: se distribuye bajo **Apache-2.0**.
+- **Backend/paquete `xycutppy-paper`** (código en `src/paper/xycut_plus_plus`): se distribuye bajo **GPL-3.0-or-later**.
+
+Archivos de referencia:
+
+- `LICENSE` (raíz): declaración formal dual-license (`Apache-2.0 OR GPL-3.0-or-later`).
+- `src/datalab/xycut_plus_plus_sorter/LICENSE`: texto de **Apache-2.0**.
+- `src/paper/xycut_plus_plus/LICENSE`: texto de **GPL-3.0**.
 
 ## 📦 Instalación
 
@@ -94,7 +106,7 @@ xycut_project/
 ├── pyproject.toml      # Configuración del proyecto y de maturin
 ├── README.md
 ├── Cargo.toml
-├── LICENSE             # GPL-3.0 (backend paper)
+├── LICENSE             # Declaración dual-license: Apache-2.0 OR GPL-3.0-or-later
 ├── src/
 │   ├── lib.rs          # Módulo Python nativo (PyO3)
 │   ├── paper/xycut_plus_plus/  # Núcleo Rust GPL
