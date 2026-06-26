@@ -8,6 +8,8 @@ por el algoritmo, usando mapas de colores basados en datasets tipo YOLO.
 
 import logging
 import os
+import sys
+import time
 from typing import Any, Dict, List, Tuple
 from PIL import Image, ImageDraw, ImageFont
 
@@ -128,11 +130,14 @@ logger.info(" DEMOSTRACIÓN DE BACKENDS Y CONFIGURACIÓN DE LOGGING (XYCut++) ")
 logger.info("======================================================================\n")
 
 # Configuración básica del logger nativo de Python
-logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
+logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s', stream=sys.stdout)
+
+global_start = time.perf_counter()
 
 available_backends = available_backends()
-logger.info(f"Backends detectados e instalados en este sistema: {available_backends}")
+logger.info(f"[{time.perf_counter() - global_start:.6f}s] Backends detectados e instalados en este sistema: {available_backends}")
 
+warm_start = time.perf_counter()
 # Probamos a ejecutar una llamada cambiando niveles de loggers para ver cómo interactúa con Rust
 for b in available_backends:
     logger.info(f"\n--> Probando comportamiento de logs con Backend: '{b.upper()}'")
@@ -149,6 +154,8 @@ for b in available_backends:
     configure_logging(logging.DEBUG)
     compute_order([{'id': 0, 'x1': 0., 'y1': 0., 'x2': 10., 'y2': 10., 'label': SemanticLabel.Regular}],
                   (0., 0., 50., 50.), backend=b)
+
+logging.info(f"[{time.perf_counter() - warm_start:.6f}s] Prueba de logs completada para todos los backends.\n")
 
 # Reseteamos a INFO para continuar limpios con los escenarios estructurales
 configure_logging(logging.INFO)
@@ -209,10 +216,11 @@ config_optimizada = XYCutConfig(
     same_row_tolerance=10.0
 )
 
-logger.info("\n======================================================================")
+logger.info("======================================================================")
 logger.info(" PROCESANDO ESCENARIOS ESTRUCTURALES Y GENERANDO MAPAS VISUALES ")
 logger.info("======================================================================")
 
+batch_start = time.perf_counter()
 for b in available_backends:
     logger.info(f"\nEjecutando suite de layouts sobre el backend: '{b.upper()}'")
 
@@ -235,12 +243,14 @@ for b in available_backends:
         logger.info(f" -> Ordenando {filename_base}...")
 
         # Invocamos el algoritmo empaquetado en Rust
+        process_start = time.perf_counter()
         ids_ordenados = compute_order(
             processed_elements,
             page_dimensions,
             config=config_optimizada,
             backend=b
         )
+        logging.info(f"[{time.perf_counter() - process_start:.6f}s] Ordenación completada. Prueba: {filename_base}")
 
         # Generamos el nombre del archivo final incluyendo qué backend lo ha resuelto
         final_filename = f"{b}_{filename_base}"
@@ -248,6 +258,9 @@ for b in available_backends:
         # Dibujamos y guardamos el PNG
         render_page_layout(final_filename, raw_elements, ids_ordenados, page_dimensions)
 
-logger.info("\n======================================================================")
-logger.info(" ¡PROCESO COMPLETADO! Revisa la carpeta 'output_examples/' para ver los PNGs ")
+
 logger.info("======================================================================")
+logger.info(f"[{time.perf_counter() - batch_start:.6f}s] ¡PROCESO COMPLETADO! Revisa la carpeta 'output_examples/' para ver los PNGs ")
+logger.info("======================================================================")
+
+logger.info(f"[{time.perf_counter() - global_start:.4f}s] Tiempo total de ejecución del script de demostración.")
