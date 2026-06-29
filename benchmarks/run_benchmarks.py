@@ -2,9 +2,11 @@ import json
 import os
 import shutil
 import subprocess
-import traceback
+import tempfile
 import time
+import traceback
 from abc import abstractmethod, ABC
+from pathlib import Path
 from typing import List, Dict, Tuple, Any, Callable, Protocol, cast, Literal, Optional
 
 import lightgbm as lgb
@@ -13,10 +15,6 @@ import requests
 from PIL import Image, ImageDraw, ImageFont
 from datasets import load_dataset
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-try:
-    from pdflatex import PDFLaTeX
-except ImportError:
-    PDFLaTeX = None
 from scipy.stats import kendalltau  # NUEVA DEPENDENCIA: pip install scipy
 from tqdm import tqdm
 from transformers import PreTrainedModel
@@ -432,9 +430,8 @@ class HuriDocsCandidateSelectorAdapter(ReadingOrderAlgorithmBase):
         return (bboxes,), {}
 
     def main(self, inputs: Tuple[tuple, dict]):
-        model, device = self._ensure_model()
+        model = self._ensure_model()
         assert model is not None
-        assert device is not None
 
         tuple_inputs, prepared_inputs = inputs
         bboxes = tuple_inputs[0]
@@ -1334,27 +1331,21 @@ def print_and_render_benchmark_latex_table(metrics_report: Dict[str, Dict[str, D
             )
         row_lines.append(" & ".join(row_cells) + r" \\")
 
-    col_spec = "lll" + ("cccc" * len(datasets))
-    latex_doc = f"""\\documentclass{{article}}
+    col_spec = "llc" + ("cccc" * len(datasets))
+    latex_doc = f"""\\documentclass[varwidth,border=2pt]{{standalone}}
 \\usepackage{{graphicx}}
 \\usepackage{{booktabs}}
 \\usepackage{{multirow}}
 \\usepackage{{makecell}}
 \\usepackage{{amssymb}}
-\\usepackage[margin=0.5in]{{geometry}}
-
-\\title{{XYCut++}}
-\\author{{Víctor Quilón}}
-\\date{{June 2026}}
 
 \\begin{{document}}
-\\maketitle
 
-\\section{{Comparative table results}}
-
-\\begin{{table*}}[htbp]
+\\centering
 \\setlength{{\\tabcolsep}}{{3pt}}
 \\renewcommand{{\\arraystretch}}{{1.2}}
+\\newsavebox{{\\benchmarktablebox}}
+\\sbox{{\\benchmarktablebox}}{{%
 \\begin{{tabular}}{{{col_spec}}}
 \\toprule
 \\multirow{{2}}{{*}}{{\\textbf{{Method}}}} & \\multirow{{2}}{{*}}{{\\textbf{{Source}}}} & \\multirow{{2}}{{*}}{{\\textbf{{\\makecell{{Semantic\\\\Info}}}}}} & {header_groups} \\\\
@@ -1364,11 +1355,16 @@ def print_and_render_benchmark_latex_table(metrics_report: Dict[str, Dict[str, D
 {chr(10).join(row_lines)}
 \\bottomrule
 \\end{{tabular}}
+}}
+\\usebox{{\\benchmarktablebox}}
 
-\\vspace{{0.2cm}}
-\\small
+\\vspace{{0.3cm}}
+\\makebox[\\wd\\benchmarktablebox][c]{{%
+\\parbox{{0.98\\wd\\benchmarktablebox}}{{%
+\\centering\\small
 Benchmark Reading Order summary automatically generated from run\\_benchmarks.py. Metric key: FPS $\\uparrow$ / BLEU-4 $\\uparrow$ / ARD $\\downarrow$ / Tau $\\uparrow$. Best results are in \\textbf{{bold}}; second-best are \\underline{{underlined}}.
-\\end{{table*}}
+}}%
+}}
 
 \\end{{document}}
 """
@@ -1378,61 +1374,81 @@ Benchmark Reading Order summary automatically generated from run\\_benchmarks.py
     print("=" * 108)
     print(latex_doc)
 
-    os.makedirs("output_examples", exist_ok=True)
-    tex_path = os.path.join("output_examples", "benchmark_table.tex")
-    pdf_path = os.path.join("output_examples", "benchmark_table.pdf")
-    png_path = os.path.join("output_examples", "benchmark_table.png")
-    with open(tex_path, "w", encoding="utf-8") as tex_file:
+    output_path = Path(__file__).parent / "output_examples"
+    output_path.mkdir(parents=True, exist_ok=True)
+    tex_path = output_path / "benchmark_table.tex"
+    svg_path = output_path / "benchmark_table.svg"
+    png_path = output_path / "benchmark_table.png"
+    with open(tex_path, "w", encoding="utf-8", newline="\n") as tex_file:
         tex_file.write(latex_doc)
 
-    if PDFLaTeX is None:
-        print(f"[LATEX] Archivo .tex generado en: {tex_path}")
-        print("[LATEX] No se encontró el paquete Python 'pdflatex'; no fue posible compilar el PDF.")
-        return
+    with tempfile.TemporaryDirectory() as td:
+        latex_cmd = [
+            "latex",
+            "-jobname=file",
+            f"-output-directory={td}",
+            str(tex_path),
+        ]
+        try:
+            print(latex_cmd)
+            fp = subprocess.run(latex_cmd, timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            dvi_path = os.path.join(td, 'file.dvi')
+            with open(dvi_path, 'rb') as f:
+                dvi_bytes = f.read()
+            with open(os.path.join(td, 'file.log'), 'rb') as f:
+                latex_log = f.read()
+        except Exception as e:
+            traceback.print_exc()
 
-    with open(tex_path, "rb") as tex_source:
-        pdfl = PDFLaTeX.from_binarystring(tex_source.read(), "benchmark_table")
-    try:
-        pdf_bytes, latex_log, completed_process = pdfl.create_pdf(keep_pdf_file=False, keep_log_file=False)
-    except Exception as e:
-        traceback.print_exc()
-        raise ValueError("[LATEX] Necesitas instalar primero mktext https://miktex.org/download")
-
-    if completed_process.returncode != 0:
-        print(f"[LATEX] Falló pdflatex (exit {completed_process.returncode}).")
-        print(latex_log[-1000:])
-        return
-    if not pdf_bytes:
-        print("[LATEX] pdflatex no devolvió contenido PDF.")
-        return
-    with open(pdf_path, "wb") as pdf_file:
-        pdf_file.write(pdf_bytes)
-
-    pdftoppm_bin = shutil.which("pdftoppm")
-    magick_bin = shutil.which("magick")
-    if pdftoppm_bin:
-        ppm_prefix = os.path.join("output_examples", "benchmark_table")
-        render_cmd = [pdftoppm_bin, "-f", "1", "-singlefile", "-png", pdf_path, ppm_prefix]
-        render_result = subprocess.run(render_cmd, capture_output=True, text=True, check=False)
-        if render_result.returncode == 0:
-            print(f"[LATEX] Imagen renderizada en: {png_path}")
+        if fp.returncode != 0:
+            print(f"[LATEX] Falló latex (exit {fp.returncode}).")
+            print(latex_log[-1000:])
             return
-        print(f"[LATEX] Falló pdftoppm (exit {render_result.returncode}).")
-        print(render_result.stdout[-1000:])
-        print(render_result.stderr[-1000:])
-
-    if magick_bin:
-        render_cmd = [magick_bin, "-density", "300", f"{pdf_path}[0]", "-quality", "100", png_path]
-        render_result = subprocess.run(render_cmd, capture_output=True, text=True, check=False)
-        if render_result.returncode == 0:
-            print(f"[LATEX] Imagen renderizada en: {png_path}")
+        if not dvi_bytes:
+            print("[LATEX] latex no devolvió contenido.")
             return
-        print(f"[LATEX] Falló ImageMagick (exit {render_result.returncode}).")
-        print(render_result.stdout[-1000:])
-        print(render_result.stderr[-1000:])
-
-    print(f"[LATEX] PDF generado en: {pdf_path}")
-    print("[LATEX] No se encontró un conversor PDF->PNG (pdftoppm o magick).")
+        dvisvgm_bin = shutil.which("dvisvgm")
+        if dvisvgm_bin:
+            svg_name = svg_path.name
+            render_cmd = [dvisvgm_bin, "-o", svg_name, "file.dvi"]
+            print(render_cmd)
+            render_result = subprocess.run(
+                render_cmd,
+                timeout=15,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=td,
+            )
+            if render_result.returncode == 0:
+                shutil.move(os.path.join(td, svg_name), svg_path)
+                print(f"[LATEX] SVG renderizado en: {svg_path}")
+            else:
+                print(f"[LATEX] Falló dvisvgm (exit {render_result.returncode}).")
+                print(render_result.stdout[-1000:])
+                print(render_result.stderr[-1000:])
+        dvipng_bin = shutil.which("dvipng")
+        if dvipng_bin:
+            png_name = png_path.name
+            render_cmd = [dvipng_bin, "-T", "tight", "-o", png_name, "file.dvi"]
+            print(render_cmd)
+            render_result = subprocess.run(
+                render_cmd,
+                timeout=15,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=td,
+            )
+            if render_result.returncode == 0:
+                shutil.move(os.path.join(td, png_name), png_path)
+                print(f"[LATEX] PNG renderizado en: {png_path}")
+                return
+            print(f"[LATEX] Falló dvipng (exit {render_result.returncode}).")
+            print(render_result.stdout[-1000:])
+            print(render_result.stderr[-1000:])
+        if svg_path.exists():
+            print(f"[LATEX] Imagen generada en: {svg_path}")
+            return
+        print("[LATEX] No se pudo generar la imagen.")
 
 
 
@@ -1450,17 +1466,21 @@ if __name__ == "__main__":
     xycutppy_paper_sorter = ReadingOrderSorterFactory(
         XYCutPPY(name="xycutppy-paper", backend="paper")
     )
-    hantian_sorter = ReadingOrderSorterFactory(
-        HantianLayoutReaderAdapter(name="hantian", device="cpu")
+    hantian_cpu_sorter = ReadingOrderSorterFactory(
+        HantianLayoutReaderAdapter(name="LayoutReader [CPU]", device="cpu")
+    )
+    hantian_gpu_sorter = ReadingOrderSorterFactory(
+        HantianLayoutReaderAdapter(name="LayoutReader [GPU]", device="cuda")
     )
     huridocs_sorter = ReadingOrderSorterFactory(
         HuriDocsCandidateSelectorAdapter(name="huridocs")
     )
     sorter_solutions = [
         xycutppy_sorter,
-        # xycutppy_paper_sorter,
-        # hantian_sorter,
-        # huridocs_sorter,
+        xycutppy_paper_sorter,
+        # hantian_cpu_sorter,
+        hantian_gpu_sorter,
+        huridocs_sorter,
     ]
 
     # Diccionario para acumular los reportes de rendimiento
@@ -1468,13 +1488,13 @@ if __name__ == "__main__":
 
     # Lista de Datasets configurados para evaluación secuencial
     target_datasets = [
-        # "zilongwang/ReadingBank",
-        # "opendatalab/OmniDocBench",
+        "zilongwang/ReadingBank",
+        "opendatalab/OmniDocBench",
         "llamaindex/ParseBench"
     ]
 
     # Límite de muestras por dataset para pruebas ágiles de desarrollo (Sustituir por None en producción)
-    MAX_SAMPLES_TO_TEST = 10
+    MAX_SAMPLES_TO_TEST = None
 
     total_algorithms = len(sorter_solutions)
     total_datasets = len(target_datasets)
