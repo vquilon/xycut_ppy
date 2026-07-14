@@ -1,64 +1,26 @@
+import csv
 import json
 import os
-import shutil
-import subprocess
-import tempfile
 import time
 import traceback
-from abc import abstractmethod, ABC
+from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Tuple, Any, Callable, Protocol, cast, Literal, Optional
+from collections import defaultdict
+from typing import List, Dict, Tuple, Any, Callable, cast, Literal, Optional
 
-import lightgbm as lgb
 import numpy as np
 import requests
 from PIL import Image, ImageDraw, ImageFont
 from datasets import load_dataset
 from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
-from scipy.stats import kendalltau  # NUEVA DEPENDENCIA: pip install scipy
+from scipy.stats import kendalltau
 from tqdm import tqdm
-from transformers import PreTrainedModel
-# Importamos las herramientas de nuestro paquete unificado en Rust/Python
-from xycutppy import SemanticLabel, compute_order, XYCutConfig
 
-# ----------------------------------------------------------------------
-# Configuración del mapeo de etiquetas y colores (Estilo YOLO Layout)
-# ----------------------------------------------------------------------
-LABEL_MAP = {
-    0: 'Caption', 1: 'Footnote', 2: 'Formula', 3: 'List-item',
-    4: 'Page-footer', 5: 'Page-header', 6: 'Picture',
-    7: 'Section-header', 8: 'Table', 9: 'Text', 10: 'Title'
-}
-
-# Asignamos un color RGB pastel/distinguible a cada tipo de etiqueta para la visualización
-COLOR_MAP = {
-    'Caption': (255, 182, 193),  # Rosa claro
-    'Footnote': (220, 220, 220),  # Gris claro
-    'Formula': (255, 218, 185),  # Melocotón
-    'List-item': (204, 255, 204),  # Verde pastel
-    'Page-footer': (176, 224, 230),  # Azul polvo
-    'Page-header': (176, 224, 230),  # Azul polvo
-    'Picture': (255, 255, 204),  # Amarillo claro
-    'Section-header': (230, 230, 250),  # Lavanda
-    'Table': (255, 204, 153),  # Naranja suave
-    'Text': (204, 229, 255),  # Azul cielo claro
-    'Title': (255, 153, 153),  # Rojo coral blando
-}
-
-# Mapeo intermedio para transformar etiquetas YOLO/Strings a los enums que acepta nuestro core en Rust
-SEMANTIC_MAPPING = {
-    'Title': SemanticLabel.HorizontalTitle,
-    'Section-header': SemanticLabel.HorizontalTitle,
-    'Page-header': SemanticLabel.CrossLayout,
-    'Page-footer': SemanticLabel.CrossLayout,
-    'Picture': SemanticLabel.Vision,
-    'Table': SemanticLabel.Vision,
-    'Formula': SemanticLabel.Vision,
-    'Text': SemanticLabel.Regular,
-    'List-item': SemanticLabel.Regular,
-    'Caption': SemanticLabel.Regular,
-    'Footnote': SemanticLabel.Regular,
-}
+from providers.sorters.base import COLOR_MAP, YOLO_ELEMENTS_MAPPING, ReadingOrderWrapper
+from providers.sorters.factory import ReadingOrderSorterFactory
+from providers.sorters.hantian import HantianLayoutReaderAdapter
+from providers.sorters.huridocs import HuriDocsCandidateSelectorAdapter
+from providers.sorters.xycutppy import XYCutPPYReadingOrderAdapter
 
 
 # ----------------------------------------------------------------------
@@ -131,357 +93,6 @@ def render_page_layout(
 ReadingOrderProvider = Callable[[List[Dict[str, Any]], Tuple[float, float, float, float], ...], List[int]]
 ReadingOrderAlgorithms = Literal["xycutppy", "hantian", "huridocs"]
 
-class ReadingOrderWrapper(Protocol):
-    def __call__(self, elements: List[Dict[str, Any]], page_bounds: Tuple[float, float, float, float], **kwargs: Any) -> List[int]:
-        ...
-
-class ReadingOrderAlgorithmBase(ABC):
-    __KIND: str = None
-
-    def __init__(self, name: str):
-        self.name = name
-        self.kind = self.__KIND
-
-    def prepare_inputs(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            **kwargs: Any
-    ) -> Tuple[tuple, dict]:
-        return (elements, page_bounds), kwargs
-
-    @abstractmethod
-    def main(self, inputs: Tuple[tuple, dict]):
-        raise NotImplemented
-
-    def format_output(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            results: Any,
-    ) -> List[int]:
-        return results
-
-
-class XYCutPPY(ReadingOrderAlgorithmBase):
-    __KIND = "xycutppy"
-
-    def __init__(self, name: str, config: Optional[XYCutConfig] = None, backend: Optional[str] = "datalab"):
-        super().__init__(name)
-        self.config = config
-        self.backend = backend
-
-    def prepare_inputs(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            **kwargs: Any
-    ):
-        for elem in elements:
-            if elem['label'] in SEMANTIC_MAPPING:
-                elem['label'] = SEMANTIC_MAPPING[elem['label']]
-
-            if elem['label'] not in SEMANTIC_MAPPING.values():
-                elem['label'] = SemanticLabel.Regular
-
-        return (elements, page_bounds), {'config': self.config, 'backend': self.backend}
-
-    def main(self, inputs: Tuple[tuple, dict]):
-        (elements, page_bounds), kwargs = inputs
-
-        return compute_order(elements, page_bounds, **kwargs)
-
-
-class HantianLayoutReaderAdapter(ReadingOrderAlgorithmBase):
-    """
-    Adaptador del modelo Hantian/LayoutReader al contrato ReadingOrderWrapper.
-    """
-    __KIND = "hantian/layoutreader"
-
-    def __init__(self, name: str, model_id: str = "hantian/layoutreader", device: Literal["cpu", "cuda", "mps", "auto"] = "auto"):
-        super().__init__(name)
-        self.model_id = model_id
-        self._device: str = device
-        self._model: PreTrainedModel | None = None
-
-    @staticmethod
-    def _boxes_to_inputs(boxes: List[List[int]]) -> Dict[str, Any]:
-        import torch
-
-        max_len = 510
-        cls_token_id = 0
-        unk_token_id = 3
-        eos_token_id = 2
-
-        sliced = boxes[:max_len]
-        bbox = [[0, 0, 0, 0]] + sliced + [[0, 0, 0, 0]]
-        input_ids = [cls_token_id] + [unk_token_id] * len(sliced) + [eos_token_id]
-        attention_mask = [1] + [1] * len(sliced) + [1]
-        return {
-            "bbox": torch.tensor([bbox]),
-            "attention_mask": torch.tensor([attention_mask]),
-            "input_ids": torch.tensor([input_ids]),
-        }
-
-    @staticmethod
-    def _parse_logits(logits: Any, length: int) -> List[int]:
-        logits = logits[1: length + 1, :length]
-        orders = logits.argsort(descending=False).tolist()
-        predicted = [order_candidates.pop() for order_candidates in orders]
-        while True:
-            order_to_indexes: Dict[int, List[int]] = {}
-            for idx, order in enumerate(predicted):
-                order_to_indexes.setdefault(order, []).append(idx)
-            duplicates = {order: indexes for order, indexes in order_to_indexes.items() if len(indexes) > 1}
-            if not duplicates:
-                break
-            for order, indexes in duplicates.items():
-                index_to_logit = {idx: logits[idx, order] for idx in indexes}
-                sorted_conflicts = sorted(index_to_logit.items(), key=lambda item: item[1], reverse=True)
-                for idx, _ in sorted_conflicts[1:]:
-                    predicted[idx] = orders[idx].pop()
-        return predicted
-
-    @staticmethod
-    def _prepare_model_inputs(inputs: Dict[str, Any], model: PreTrainedModel) -> Dict[str, Any]:
-        import torch
-
-        prepared_inputs: Dict[str, Any] = {}
-        for key, value in inputs.items():
-            value = value.to(model.device)
-            if torch.is_floating_point(value):
-                value = value.to(model.dtype)
-            prepared_inputs[key] = value
-        return prepared_inputs
-
-    def _infer_reading_order_with_layoutreader(
-            self, model: PreTrainedModel, bboxes: List[List[int]]
-    ) -> List[int]:
-        if not bboxes:
-            return []
-
-        normalized_bboxes = [[int(coord) for coord in bbox] for bbox in bboxes]
-        inputs = self._boxes_to_inputs(normalized_bboxes)
-        prepared_inputs = self._prepare_model_inputs(inputs, model)
-        logits = model(**prepared_inputs).logits.cpu().squeeze(0)
-        return self._parse_logits(logits, len(normalized_bboxes))
-
-    @staticmethod
-    def _normalize_layoutreader_bbox(
-            bbox: Tuple[float, float, float, float],
-            page_bounds: Tuple[float, float, float, float],
-    ) -> List[int]:
-        page_x1, page_y1, page_x2, page_y2 = [float(value) for value in page_bounds]
-        page_width = page_x2 - page_x1
-        page_height = page_y2 - page_y1
-
-        x1, y1, x2, y2 = bbox
-        x1, x2 = sorted((x1, x2))
-        y1, y2 = sorted((y1, y2))
-
-        if page_width <= 0 or page_height <= 0:
-            return [
-                max(0, min(1000, int(round(x1)))),
-                max(0, min(1000, int(round(y1)))),
-                max(0, min(1000, int(round(x2)))),
-                max(0, min(1000, int(round(y2)))),
-            ]
-
-        x1 = max(page_x1, min(page_x2, x1))
-        x2 = max(page_x1, min(page_x2, x2))
-        y1 = max(page_y1, min(page_y2, y1))
-        y2 = max(page_y1, min(page_y2, y2))
-
-        norm_x1 = max(0, min(1000, int(round(((x1 - page_x1) / page_width) * 1000))))
-        norm_x2 = max(0, min(1000, int(round(((x2 - page_x1) / page_width) * 1000))))
-        norm_y1 = max(0, min(1000, int(round(((y1 - page_y1) / page_height) * 1000))))
-        norm_y2 = max(0, min(1000, int(round(((y2 - page_y1) / page_height) * 1000))))
-        return [norm_x1, norm_y1, norm_x2, norm_y2]
-
-    def _ensure_model(self) -> Tuple[PreTrainedModel, str]:
-        if self._model is not None and self._device is not None:
-            return self._model, self._device
-
-        import torch
-        from transformers import LayoutLMv3ForTokenClassification
-
-        device = self._device
-        if device == "auto":
-            device = "cpu"
-            if torch.cuda.is_available():
-                device = "cuda"
-            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
-                device = "mps"
-
-        self._device = device
-        self._model = (
-            LayoutLMv3ForTokenClassification.from_pretrained(self.model_id)
-            .bfloat16()
-            .to(device)
-            .eval()
-        )
-        if self._model is None or self._device is None:
-            raise RuntimeError()
-
-        return self._model, self._device
-
-    def prepare_inputs(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            **kwargs: Any,
-    ) -> Tuple[tuple, dict]:
-        if not elements:
-            raise RuntimeError()
-
-        bboxes = []
-        for elem in elements:
-            bbox = (
-                float(elem["x1"]),
-                float(elem["y1"]),
-                float(elem["x2"]),
-                float(elem["y2"]),
-            )
-            bboxes.append(self._normalize_layoutreader_bbox(bbox, page_bounds))
-        return (bboxes,), {}
-
-    def main(self, inputs: Tuple[tuple, dict]):
-        model, device = self._ensure_model()
-        assert model is not None
-        assert device is not None
-
-        tuple_args, _ = inputs
-        bboxes = tuple_args[0]
-        return self._infer_reading_order_with_layoutreader(model, bboxes)
-
-    def format_output(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            results: Any,
-    ) -> List[int]:
-        order_indexes = results
-        return [elements[idx]["id"] for idx in order_indexes if 0 <= idx < len(elements)]
-
-
-class HuriDocsCandidateSelectorAdapter(ReadingOrderAlgorithmBase):
-    """
-    Adaptador bbox-only inspirado en el selector de candidatos de HURIDOCS.
-    """
-    __KIND = "huridocs/pdf-reading-order"
-
-    def __init__(self, name: str):
-        super().__init__(name)
-        self._model: Optional[lgb.Booster] = None
-
-    @staticmethod
-    def _bbox_features(current_bbox: List[float], candidate_bbox: List[float]) -> List[float]:
-        return [
-            current_bbox[1],
-            current_bbox[0],
-            current_bbox[2],
-            current_bbox[3],
-            candidate_bbox[1],
-            candidate_bbox[0],
-            candidate_bbox[2],
-            candidate_bbox[3],
-            current_bbox[3] - candidate_bbox[1],
-        ]
-
-    def _ensure_model(self) -> lgb.Booster:
-        if self._model is not None:
-            return self._model
-
-        import lightgbm as lgb
-        from huggingface_hub import hf_hub_download
-
-        model_path = hf_hub_download(
-            repo_id="HURIDOCS/pdf-reading-order",
-            filename="candidate_selector_model.model"
-        )
-        self._model = lgb.Booster(model_file=model_path)
-        if self._model is None:
-            raise RuntimeError()
-
-        return self._model
-
-    def prepare_inputs(
-            self,
-            elements: List[Dict[str, Any]],
-            page_bounds: Tuple[float, float, float, float],
-            **kwargs: Any,
-    ) -> Tuple[tuple, dict]:
-        _ = page_bounds
-        _ = kwargs
-        if not elements:
-            return tuple(), {}
-
-        model = self._ensure_model()
-        assert model is not None
-
-        bboxes = [
-            {
-                "id": elem["id"],
-                "bbox": [float(elem["x1"]), float(elem["y1"]), float(elem["x2"]), float(elem["y2"])],
-            }
-            for elem in elements
-        ]
-
-        return (bboxes,), {}
-
-    def main(self, inputs: Tuple[tuple, dict]):
-        model = self._ensure_model()
-        assert model is not None
-
-        tuple_inputs, prepared_inputs = inputs
-        bboxes = tuple_inputs[0]
-
-        remaining = bboxes.copy()
-
-        current_bbox = [0.0, 0.0, 0.0, 0.0]
-        ordered_ids: List[int] = []
-
-        while remaining:
-            feature_matrix = np.array(
-                [self._bbox_features(current_bbox, candidate["bbox"]) for candidate in remaining], dtype=float
-            )
-            prediction_scores = model.predict(feature_matrix)
-            if np.ndim(prediction_scores) == 2 and prediction_scores.shape[1] > 1:
-                positive_scores = prediction_scores[:, 1]
-            else:
-                positive_scores = np.asarray(prediction_scores).reshape(-1)
-            best_idx = int(np.argmax(positive_scores))
-            selected = remaining.pop(best_idx)
-            ordered_ids.append(cast(int, selected["id"]))
-            current_bbox = selected["bbox"]
-
-        return ordered_ids
-
-
-class ReadingOrderSorterFactory:
-    """
-    Factory para registrar, configurar y adaptar diferentes algoritmos de Reading Order.
-    """
-
-    def __init__(self, sort_algorithm: ReadingOrderAlgorithmBase):
-        self.name = sort_algorithm.name
-        self.kind = sort_algorithm.kind
-        self.algorithm = self.create_sorter(sort_algorithm)
-
-    @staticmethod
-    def create_sorter(
-        sort_algorithm: ReadingOrderAlgorithmBase,
-    ) -> ReadingOrderWrapper:
-        """
-        Inyecta hiperparámetros específicos (como umbrales para XY-Cut) envolviendo la función.
-        """
-        def sorter_wrapper(elements: List[Dict[str, Any]], page_bounds: Tuple[float, float, float, float], **kwargs) -> List[int]:
-            prepared_inputs = sort_algorithm.prepare_inputs(elements, page_bounds, **kwargs)
-            results = sort_algorithm.main(prepared_inputs)
-            return sort_algorithm.format_output(elements, page_bounds, results)
-
-        return sorter_wrapper
-
 
 # =====================================================================
 # 3. MOTOR DEL BENCHMARK MULTI-DATASET
@@ -521,7 +132,7 @@ class ReadingOrderBenchmark:
         ys = poly[1::2]
         return min(xs), min(ys), max(xs), max(ys)
 
-    def _normalize_reading_bank(self, raw_sample: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float]]:
+    def _normalize_reading_bank(self, raw_sample: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float], Optional[str]]:
         """
         Transforma el formato de ReadingBank al estándar unificado del framework.
         """
@@ -552,7 +163,10 @@ class ReadingOrderBenchmark:
         else:
             page_bounds = (0.0, 0.0, 1000.0, 1000.0)
 
-        return normalized_elements, ground_truth_order, page_bounds
+        # ReadingBank no expone categorías de tipo de documento en su esquema público
+        category: Optional[str] = None
+
+        return normalized_elements, ground_truth_order, page_bounds, category
 
     def _format_omni_doc_bench_to_yolo_labels(self, omnidoc_bench_label: str) -> str:
         OMNIDOC_BENCH_MAPPING_CATEGORY = {
@@ -657,7 +271,7 @@ class ReadingOrderBenchmark:
             "text": "Text",
             "table": "Table",
         }
-        yolo_labels = set(SEMANTIC_MAPPING.keys()) | set(COLOR_MAP.keys())
+        yolo_labels = YOLO_ELEMENTS_MAPPING | set(COLOR_MAP.keys())
         yolo_label_by_normalized = {
             self._normalize_parsebench_key(label): label
             for label in yolo_labels
@@ -704,7 +318,7 @@ class ReadingOrderBenchmark:
         return "Text"
 
 
-    def _normalize_omni_doc_bench(self, json_item: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float]]:
+    def _normalize_omni_doc_bench(self, json_item: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float], Optional[str]]:
         """
         Transforma el formato JSON jerárquico de OmniDocBench al estándar unificado.
         """
@@ -747,9 +361,18 @@ class ReadingOrderBenchmark:
             y_max = max([e["y2"] for e in normalized_elements])
             page_bounds = (0.0, 0.0, x_max, y_max)
 
-        return normalized_elements, ground_truth_order, page_bounds
+        # OmniDocBench categoriza cada página por tipo de documento:
+        # academic_literature, book, colorful_textbook, exam_paper, historical_document,
+        # magazine, newspaper, note, PPT2PDF, research_report
+        category: Optional[str] = (
+            (json_item.get("page_info") or {})
+            .get("page_attribute", {})
+            .get("data_source")
+        ) or None
 
-    def _normalize_parsebench(self, raw_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float]]:
+        return normalized_elements, ground_truth_order, page_bounds, category
+
+    def _normalize_parsebench(self, raw_rows: List[Dict[str, Any]]) -> Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float], Optional[str]]:
         """
         Transforma el formato de ParseBench al estándar unificado del framework.
         """
@@ -807,7 +430,7 @@ class ReadingOrderBenchmark:
             })
 
         if not valid_elements:
-            return [], [], (0.0, 0.0, 1.0, 1.0)
+            return [], [], (0.0, 0.0, 1.0, 1.0), None
 
         normalized_elements = []
         for idx, element in enumerate(valid_elements):
@@ -830,7 +453,25 @@ class ReadingOrderBenchmark:
         y_max = max([e["y2"] for e in normalized_elements], default=1.0)
         page_bounds = (0.0, 0.0, float(x_max), float(y_max))
 
-        return normalized_elements, ground_truth_order, page_bounds
+        # ParseBench (split layout) clasifica cada página con dificultad via tags: "easy" / "hard"
+        category: Optional[str] = None
+        _difficulty_tags = {"easy", "hard"}
+        for _row in raw_rows:
+            _tags = _row.get("tags") or []
+            if isinstance(_tags, str):
+                try:
+                    import json as _json
+                    _tags = _json.loads(_tags)
+                except Exception:
+                    _tags = []
+            for _tag in _tags:
+                if isinstance(_tag, str) and _tag.lower() in _difficulty_tags:
+                    category = _tag.lower()
+                    break
+            if category:
+                break
+
+        return normalized_elements, ground_truth_order, page_bounds, category
 
 
 
@@ -878,6 +519,7 @@ class ReadingOrderBenchmark:
             sorter_callable: ReadingOrderWrapper,
             max_samples: int | None = None,
             on_progress: Callable[[int, int], None] | None = None,
+            top_n_worst: int = 10,
     ) -> Dict[str, Any]:
         """
         Ejecuta la batería de pruebas calculando promedios de palabras/cajas y la matriz de distribución.
@@ -885,7 +527,7 @@ class ReadingOrderBenchmark:
         # print(f"\n🔄 Evaluando Reading Order en: {dataset_id}")
 
         # Carga dinámica dependiendo del tipo de dataset
-        samples_to_process: List[Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float]]] = []
+        samples_to_process: List[Tuple[List[Dict[str, Any]], List[int], Tuple[float, float, float, float], Optional[str]]] = []
         if dataset_id == "zilongwang/ReadingBank":
             try:
                 hf_dataset = load_dataset(dataset_id, split="test")
@@ -937,7 +579,20 @@ class ReadingOrderBenchmark:
         b1, b2, b3, b4 = 0, 0, 0, 0
         total_time_inference = 0.0
 
-        for sample_index, (elements, gt_order, page_bounds) in enumerate(samples_to_process, start=1):
+        # Acumuladores por categoría
+        cat_bleu: Dict[str, List[float]] = defaultdict(list)
+        cat_tau: Dict[str, List[float]] = defaultdict(list)
+        cat_ard: Dict[str, List[float]] = defaultdict(list)
+        cat_elements: Dict[str, List[int]] = defaultdict(list)
+        cat_b1: Dict[str, int] = defaultdict(int)
+        cat_b2: Dict[str, int] = defaultdict(int)
+        cat_b3: Dict[str, int] = defaultdict(int)
+        cat_b4: Dict[str, int] = defaultdict(int)
+
+        # Todas las muestras para los peores casos
+        all_sample_scores: List[Dict[str, Any]] = []
+
+        for sample_index, (elements, gt_order, page_bounds, category) in enumerate(samples_to_process, start=1):
             if not gt_order:
                 if on_progress:
                     on_progress(sample_index, total_dataset_samples)
@@ -968,13 +623,38 @@ class ReadingOrderBenchmark:
             elif 0.75 < score_bleu <= 1.00:
                 b4 += 1
 
+            # Acumular por categoría
+            cat_key = category
+            if cat_key:
+                cat_bleu[cat_key].append(score_bleu)
+                cat_tau[cat_key].append(score_tau)
+                cat_ard[cat_key].append(score_ard)
+                cat_elements[cat_key].append(len(elements))
+                if 0.0 <= score_bleu <= 0.25:
+                    cat_b1[cat_key] += 1
+                elif 0.25 < score_bleu <= 0.50:
+                    cat_b2[cat_key] += 1
+                elif 0.50 < score_bleu <= 0.75:
+                    cat_b3[cat_key] += 1
+                else:
+                    cat_b4[cat_key] += 1
+
+            # Registrar para peores casos
+            all_sample_scores.append({
+                "sample_index": sample_index,
+                "category": category or "",
+                "n_elements": len(elements),
+                "bleu": score_bleu,
+                "tau": score_tau,
+                "ard": score_ard,
+            })
+
             if on_progress:
                 on_progress(sample_index, total_dataset_samples)
 
         total_samples = len(bleu_scores) if bleu_scores else 1
 
-        # Generamos la fila de resultados para el Dataset evaluado
-        return {
+        general_metrics = {
             "avg_elements": np.mean(elements_lengths) if elements_lengths else 0.0,
             "avg_bleu": np.mean(bleu_scores) if bleu_scores else 0.0,
             "avg_tau": np.mean(tau_scores) if tau_scores else 0.0,
@@ -983,475 +663,151 @@ class ReadingOrderBenchmark:
             "b1": f"{b1:,}",
             "b2": f"{b2:,}",
             "b3": f"{b3:,}",
-            "b4": f"{b4:,}"
+            "b4": f"{b4:,}",
+        }
+
+        # Métricas por categoría
+        categories_metrics: Dict[str, Dict[str, Any]] = {}
+        for ck in cat_bleu:
+            n = len(cat_bleu[ck])
+            categories_metrics[ck] = {
+                "n_samples": n,
+                "avg_elements": float(np.mean(cat_elements[ck])) if cat_elements[ck] else 0.0,
+                "avg_bleu": float(np.mean(cat_bleu[ck])),
+                "avg_tau": float(np.mean(cat_tau[ck])),
+                "avg_ard": float(np.mean(cat_ard[ck])),
+                "b1": cat_b1[ck],
+                "b2": cat_b2[ck],
+                "b3": cat_b3[ck],
+                "b4": cat_b4[ck],
+            }
+
+        # Peores N muestras (ordenar por BLEU ascendente)
+        worst_cases = sorted(all_sample_scores, key=lambda x: x["bleu"])[:top_n_worst]
+
+        return {
+            "general": general_metrics,
+            "categories": categories_metrics,
+            "worst_cases": worst_cases,
         }
 
 
 # =====================================================================
-# 4. ORQUESTACIÓN Y GENERACIÓN DEL REPORTE FINAL EN MARKDOWN
+# 4. ORQUESTACIÓN Y PERSISTENCIA DE RESULTADOS
 # =====================================================================
-def print_final_benchmark_table(metrics_report: Dict[str, Dict[str, Dict[str, Any]]]):
-    """
-    Imprime la matriz comparativa final transpuestas: Algoritmos como filas y Datasets como columnas.
-    Destaca en **negrita** (Top 1) y en <u>subrayado</u> (Top 2) para cada métrica individual por dataset.
-    """
-    # 1. Extraer algoritmos y datasets dinámicamente de los resultados
-    algorithms = list(metrics_report.keys())
-    datasets = []
-    for algo_data in metrics_report.values():
-        for ds in algo_data.keys():
-            if ds not in datasets:
-                datasets.append(ds)
+_CSV_FIELDNAMES = [
+    "run_timestamp", "algorithm", "dataset",
+    "avg_elements", "avg_bleu", "avg_tau", "avg_ard", "fps",
+    "b1", "b2", "b3", "b4",
+]
 
-    # 2. Definir las sub-columnas de métricas para CADA dataset
-    sub_cols_names = [
-        '#Box Avg.', 'BLEU-4 ↑', 'ARD ↓', 'Tau ↑', 'FPS ↑',
-        'BLEU(0,.25] ↓', 'BLEU(.25,.5] ↓', 'BLEU(.5,.75] ↑', 'BLEU(.75,1] ↑'
-    ]
-    n_metrics = len(sub_cols_names)
+TOP_N_WORST_SAMPLES = 10  # Parametrizable en main
 
-    # 3. Construir los headers expandidos simulando ColSpan
-    expanded_upper_cols = ['Algorithm']
-    expanded_sub_cols = ['']
+_CSV_CATEGORY_FIELDNAMES = [
+    "run_timestamp", "algorithm", "dataset", "category",
+    "n_samples", "avg_elements", "avg_bleu", "avg_tau", "avg_ard",
+    "b1", "b2", "b3", "b4",
+]
 
-    for ds in datasets:
-        short_ds = ds.split("/")[-1][:15]
-        # Centrar el nombre del dataset entre sus métricas rellenando con guiones '_'
-        pad_middle = n_metrics - 2
-
-        expanded_upper_cols.append(short_ds)
-        expanded_upper_cols.extend(["_"] * pad_middle)
-        expanded_upper_cols.append(short_ds)
-
-        expanded_sub_cols.extend(sub_cols_names)
-
-    # Configuraciones de ancho y rendering en consola
-    col_w = 16  # Ancho fijo generoso para tolerar asteriscos Markdown
-    total_width = (len(expanded_upper_cols) * (col_w + 3)) + 1
-
-    print("\n" + "=" * total_width)
-    print("📊 MATRIZ COMPARATIVA DE BENCHMARKS (READING ORDER)")
-    print("=" * total_width)
-
-    def pad_str(s, w=col_w):
-        return f"{str(s):<{w}}"
-
-    # Imprimir Headers
-    print(f"| {' | '.join(pad_str(c) for c in expanded_upper_cols)} |")
-    print("|" + "|".join(["---"] * len(expanded_upper_cols)) + "|")
-    print(f"| {' | '.join(pad_str(c) for c in expanded_sub_cols)} |")
-    print("|" + "|".join(["<span></span>"] * len(expanded_upper_cols)) + "|")
-
-    # 4. Funciones auxiliares de parseo
-    def parse_bucket(raw_val: str) -> int:
-        return int(str(raw_val).replace(',', '').split()[0])
-
-    def format_bucket_str(raw_val: str, total: int) -> str:
-        v = parse_bucket(raw_val)
-        pct = v / total if total > 0 else 0
-        return f"{v:,} ({pct:.2%})"
-
-    def format_cell(val_str: str, algo: str, top1: str, top2: str) -> str:
-        if algo == top1:
-            return f"**{val_str}**"
-        elif algo == top2:
-            return f"<u>{val_str}</u>"
-        return val_str
-
-    # 5. Pre-calcular Rankings (Top 1 y Top 2) por Dataset y por Métrica
-    rankings = {}
-    for ds in datasets:
-        # Extraer todos los registros válidos de este dataset para cruzar a todos los algoritmos
-        recs = [(algo, metrics_report[algo][ds]) for algo in algorithms if
-                ds in metrics_report[algo] and metrics_report[algo][ds]]
-
-        def get_top_2(key_ext, reverse: bool):
-            sorted_recs = sorted(recs, key=lambda x: key_ext(x[1]), reverse=reverse)
-            t1 = sorted_recs[0][0] if len(sorted_recs) > 0 else None
-            t2 = sorted_recs[1][0] if len(sorted_recs) > 1 else None
-            return t1, t2
-
-        rankings[ds] = {}
-        if recs:
-            rankings[ds]['bleu'] = get_top_2(lambda x: x['avg_bleu'], reverse=True)
-            rankings[ds]['ard'] = get_top_2(lambda x: x['avg_ard'], reverse=False)
-            rankings[ds]['tau'] = get_top_2(lambda x: x['avg_tau'], reverse=True)
-            rankings[ds]['fps'] = get_top_2(lambda x: x['fps'], reverse=True)
-            rankings[ds]['b1'] = get_top_2(lambda x: parse_bucket(x['b1']), reverse=False)
-            rankings[ds]['b2'] = get_top_2(lambda x: parse_bucket(x['b2']), reverse=False)
-            rankings[ds]['b3'] = get_top_2(lambda x: parse_bucket(x['b3']), reverse=True)
-            rankings[ds]['b4'] = get_top_2(lambda x: parse_bucket(x['b4']), reverse=True)
-
-    # 6. Procesar e Imprimir Filas (Iteramos algoritmos en Y, iteramos datasets y métricas en X)
-    for algo in algorithms:
-        row_data = [algo]
-
-        for ds in datasets:
-            data = metrics_report[algo].get(ds)
-            if not data:
-                # Si el algoritmo falló en este dataset, rellenar columnas con N/A
-                row_data.extend(["N/A"] * n_metrics)
-                continue
-
-            r = rankings[ds]
-            total_boxes = sum(parse_bucket(data[k]) for k in ['b1', 'b2', 'b3', 'b4'])
-
-            box_str = f"{data['avg_elements']:.2f}"
-            bleu_str = format_cell(f"{data['avg_bleu']:.4f}", algo, r['bleu'][0], r['bleu'][1])
-            ard_str = format_cell(f"{data['avg_ard']:.4f}", algo, r['ard'][0], r['ard'][1])
-            tau_str = format_cell(f"{data['avg_tau']:.4f}", algo, r['tau'][0], r['tau'][1])
-            fps_str = format_cell(f"{data['fps']:.2f}", algo, r['fps'][0], r['fps'][1])
-
-            b1_str = format_cell(format_bucket_str(data['b1'], total_boxes), algo, r['b1'][0], r['b1'][1])
-            b2_str = format_cell(format_bucket_str(data['b2'], total_boxes), algo, r['b2'][0], r['b2'][1])
-            b3_str = format_cell(format_bucket_str(data['b3'], total_boxes), algo, r['b3'][0], r['b3'][1])
-            b4_str = format_cell(format_bucket_str(data['b4'], total_boxes), algo, r['b4'][0], r['b4'][1])
-
-            row_data.extend([box_str, bleu_str, ard_str, tau_str, fps_str, b1_str, b2_str, b3_str, b4_str])
-
-        print(f"| {' | '.join(pad_str(c) for c in row_data)} |")
+_CSV_WORST_CASES_FIELDNAMES = [
+    "run_timestamp", "algorithm", "dataset",
+    "sample_index", "category", "n_elements",
+    "bleu", "tau", "ard",
+]
 
 
-def print_benchmark_console_dashboard(metrics_report: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
-    """
-    Render legible console output (no Markdown) con ranking visual por dataset.
-    """
-    if not metrics_report:
-        print("\nNo hay resultados para mostrar.")
-        return
+def save_results_to_csv(
+        final_report: Dict[str, Dict[str, Dict[str, Any]]],
+        run_timestamp: str,
+        results_base_dir: Path,
+) -> Path:
+    run_dir = results_base_dir / run_timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = run_dir / f"{run_timestamp}.csv"
 
-    def build_line(widths: List[int], left: str, mid: str, right: str, fill: str = "─") -> str:
-        return left + mid.join(fill * (w + 2) for w in widths) + right
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_FIELDNAMES)
+        writer.writeheader()
+        for algo_name, datasets_metrics in final_report.items():
+            for dataset_id, metrics in datasets_metrics.items():
+                if not metrics:
+                    continue
+                writer.writerow({
+                    "run_timestamp": run_timestamp,
+                    "algorithm": algo_name,
+                    "dataset": dataset_id,
+                    "avg_elements": metrics["avg_elements"],
+                    "avg_bleu": metrics["avg_bleu"],
+                    "avg_tau": metrics["avg_tau"],
+                    "avg_ard": metrics["avg_ard"],
+                    "fps": metrics["fps"],
+                    "b1": int(str(metrics["b1"]).replace(",", "")),
+                    "b2": int(str(metrics["b2"]).replace(",", "")),
+                    "b3": int(str(metrics["b3"]).replace(",", "")),
+                    "b4": int(str(metrics["b4"]).replace(",", "")),
+                })
 
-    def format_cell(value: Any, width: int, align: str = "<") -> str:
-        return f" {str(value):{align}{width}} "
-
-    def print_table(
-        headers: List[str],
-        rows: List[List[Any]],
-        aligns: List[str] | None = None,
-        min_widths: List[int] | None = None,
-    ) -> None:
-        if aligns is None:
-            aligns = ["<"] * len(headers)
-        if min_widths is None:
-            min_widths = [0] * len(headers)
-
-        widths = [len(h) for h in headers]
-        for row in rows:
-            for idx, value in enumerate(row):
-                widths[idx] = max(widths[idx], len(str(value)))
-        for idx, min_width in enumerate(min_widths):
-            widths[idx] = max(widths[idx], min_width)
-
-        print(build_line(widths, "┌", "┬", "┐"))
-        print("│" + "│".join(format_cell(headers[i], widths[i], "<") for i in range(len(headers))) + "│")
-        print(build_line(widths, "├", "┼", "┤"))
-        for row in rows:
-            print("│" + "│".join(format_cell(row[i], widths[i], aligns[i]) for i in range(len(headers))) + "│")
-        print(build_line(widths, "└", "┴", "┘"))
-
-    def metric_rank(records: List[Tuple[str, Dict[str, Any]]], key: str, higher_is_better: bool) -> Dict[str, str]:
-        sorted_records = sorted(records, key=lambda item: item[1][key], reverse=higher_is_better)
-        marks: Dict[str, str] = {}
-        if sorted_records:
-            marks[sorted_records[0][0]] = "*"
-        if len(sorted_records) > 1:
-            marks[sorted_records[1][0]] = "."
-        return marks
-
-    def numeric_col_width(values: List[float], decimals: int, include_rank_prefix: bool = False, extra_margin: int = 1) -> int:
-        max_value_len = max((len(f"{value:.{decimals}f}") for value in values), default=0)
-        rank_prefix = 2 if include_rank_prefix else 0  # marcador + espacio
-        return max_value_len + rank_prefix + extra_margin
-
-    print("\n" + "═" * 108)
-    print("BENCHMARK READING ORDER · RESUMEN CONSOLA")
-    print("Leyenda ranking por métrica: * mejor  . segundo")
-    print("═" * 108)
-
-    for dataset_name in sorted({ds for algo_data in metrics_report.values() for ds in algo_data.keys()}):
-        dataset_records = []
-        for algo_name, datasets_report in metrics_report.items():
-            data = datasets_report.get(dataset_name)
-            if data:
-                dataset_records.append((algo_name, data))
-
-        if not dataset_records:
-            continue
-
-        bleu_marks = metric_rank(dataset_records, "avg_bleu", higher_is_better=True)
-        tau_marks = metric_rank(dataset_records, "avg_tau", higher_is_better=True)
-        ard_marks = metric_rank(dataset_records, "avg_ard", higher_is_better=False)
-        fps_marks = metric_rank(dataset_records, "fps", higher_is_better=True)
-
-        headers = ["Algoritmo", "Boxes", "BLEU-4", "Tau", "ARD", "FPS", "B(0,.25]", "B(.25,.5]", "B(.5,.75]", "B(.75,1]"]
-        aligns = ["<", ">", ">", ">", ">", ">", ">", ">", ">", ">"]
-        min_widths = [
-            max(len(algo_name) for algo_name, _ in dataset_records) + 1,
-            max(len(headers[1]), numeric_col_width([data["avg_elements"] for _, data in dataset_records], decimals=2)),
-            max(len(headers[2]), numeric_col_width([data["avg_bleu"] for _, data in dataset_records], decimals=4, include_rank_prefix=True)),
-            max(len(headers[3]), numeric_col_width([data["avg_tau"] for _, data in dataset_records], decimals=4, include_rank_prefix=True)),
-            max(len(headers[4]), numeric_col_width([data["avg_ard"] for _, data in dataset_records], decimals=4, include_rank_prefix=True)),
-            max(len(headers[5]), numeric_col_width([data["fps"] for _, data in dataset_records], decimals=2, include_rank_prefix=True)),
-            max(len(headers[6]), max((len(str(data["b1"])) for _, data in dataset_records), default=0) + 1),
-            max(len(headers[7]), max((len(str(data["b2"])) for _, data in dataset_records), default=0) + 1),
-            max(len(headers[8]), max((len(str(data["b3"])) for _, data in dataset_records), default=0) + 1),
-            max(len(headers[9]), max((len(str(data["b4"])) for _, data in dataset_records), default=0) + 1),
-        ]
-        rows: List[List[Any]] = []
-        for algo_name, data in dataset_records:
-            bleu_flag = bleu_marks.get(algo_name, " ")
-            tau_flag = tau_marks.get(algo_name, " ")
-            ard_flag = ard_marks.get(algo_name, " ")
-            fps_flag = fps_marks.get(algo_name, " ")
-            rows.append([
-                algo_name,
-                f"{data['avg_elements']:.2f}",
-                f"{bleu_flag} {data['avg_bleu']:.4f}",
-                f"{tau_flag} {data['avg_tau']:.4f}",
-                f"{ard_flag} {data['avg_ard']:.4f}",
-                f"{fps_flag} {data['fps']:.2f}",
-                data["b1"],
-                data["b2"],
-                data["b3"],
-                data["b4"],
-            ])
-
-        short_name = dataset_name.split("/")[-1]
-        print(f"\nDataset: {short_name} ({dataset_name})")
-        print_table(headers, rows, aligns, min_widths=min_widths)
+    return csv_path
 
 
-def print_and_render_benchmark_latex_table(metrics_report: Dict[str, Dict[str, Dict[str, Any]]]) -> None:
-    """
-    Genera una versión LaTeX de la tabla comparativa, la imprime en consola y
-    renderiza la primera página del PDF en PNG (si las herramientas del sistema están disponibles).
-    """
-    if not metrics_report:
-        print("\nNo hay resultados para exportar a LaTeX.")
-        return
-
-    def latex_escape(raw: str) -> str:
-        escaped = raw
-        replacements = {
-            "\\": r"\textbackslash{}",
-            "&": r"\&",
-            "%": r"\%",
-            "$": r"\$",
-            "#": r"\#",
-            "_": r"\_",
-            "{": r"\{",
-            "}": r"\}",
-            "~": r"\textasciitilde{}",
-            "^": r"\textasciicircum{}",
-        }
-        for old, new in replacements.items():
-            escaped = escaped.replace(old, new)
-        return escaped
-
-    def dataset_title(dataset_id: str) -> str:
-        return f"{latex_escape(dataset_id.split('/')[-1])} (Mean)"
-
-    def method_metadata(method_name: str) -> Tuple[str, str]:
-        lower = method_name.lower()
-        if lower == "xycutppy-paper":
-            return r"\makecell{Custom\\{[this work]}}", r"$\checkmark$"
-        if lower.startswith("xycutppy"):
-            return r"\makecell{Custom\\{[this work]}}", r"\boldmath{$\times$}"
-        return r"\makecell{Custom\\{[this work]}}", r"\boldmath{$\times$}"
-
-    def metric_rank(
-        records: List[Tuple[str, Dict[str, Any]]], key: str, higher_is_better: bool
-    ) -> Dict[str, str]:
-        sorted_records = sorted(records, key=lambda item: item[1][key], reverse=higher_is_better)
-        marks: Dict[str, str] = {}
-        if sorted_records:
-            marks[sorted_records[0][0]] = "best"
-        if len(sorted_records) > 1:
-            marks[sorted_records[1][0]] = "second"
-        return marks
-
-    def style_value(value: float, decimals: int, rank_mark: str | None) -> str:
-        formatted = f"{value:.{decimals}f}"
-        if rank_mark == "best":
-            return rf"\textbf{{{formatted}}}"
-        if rank_mark == "second":
-            return rf"\underline{{{formatted}}}"
-        return formatted
-
-    datasets = sorted({ds for algo_data in metrics_report.values() for ds in algo_data.keys()})
-    methods = list(metrics_report.keys())
-
-    rankings: Dict[str, Dict[str, Dict[str, str]]] = {}
-    for dataset_name in datasets:
-        dataset_records = [
-            (method_name, metrics_report[method_name][dataset_name])
-            for method_name in methods
-            if dataset_name in metrics_report[method_name] and metrics_report[method_name][dataset_name]
-        ]
-        rankings[dataset_name] = {
-            "fps": metric_rank(dataset_records, "fps", higher_is_better=True),
-            "avg_bleu": metric_rank(dataset_records, "avg_bleu", higher_is_better=True),
-            "avg_ard": metric_rank(dataset_records, "avg_ard", higher_is_better=False),
-            "avg_tau": metric_rank(dataset_records, "avg_tau", higher_is_better=True),
-        }
-
-    group_start = 4
-    cmidrules = []
-    for idx in range(len(datasets)):
-        start = group_start + (idx * 4)
-        end = start + 3
-        cmidrules.append(rf"\cmidrule(lr){{{start}-{end}}}")
-
-    header_groups = " & ".join(
-        rf"\multicolumn{{4}}{{c}}{{\textbf{{{dataset_title(ds)}}}}}" for ds in datasets
-    )
-    header_metrics = " & ".join(
-        [r"FPS $\uparrow$", r"BLEU-4 $\uparrow$", r"ARD $\downarrow$", r"Tau $\uparrow$"] * len(datasets)
-    )
-
-    row_lines: List[str] = []
-    for method_name in methods:
-        source_cell, semantic_cell = method_metadata(method_name)
-        row_cells = [latex_escape(method_name), source_cell, semantic_cell]
-        for dataset_name in datasets:
-            data = metrics_report[method_name].get(dataset_name)
-            if not data:
-                row_cells.extend(["--", "--", "--", "--"])
-                continue
-            dataset_rank = rankings[dataset_name]
-            row_cells.extend(
-                [
-                    style_value(data["fps"], 2, dataset_rank["fps"].get(method_name)),
-                    style_value(data["avg_bleu"], 4, dataset_rank["avg_bleu"].get(method_name)),
-                    style_value(data["avg_ard"], 4, dataset_rank["avg_ard"].get(method_name)),
-                    style_value(data["avg_tau"], 4, dataset_rank["avg_tau"].get(method_name)),
-                ]
-            )
-        row_lines.append(" & ".join(row_cells) + r" \\")
-
-    col_spec = "llc" + ("cccc" * len(datasets))
-    latex_doc = f"""\\documentclass[varwidth,border=2pt]{{standalone}}
-\\usepackage{{graphicx}}
-\\usepackage{{booktabs}}
-\\usepackage{{multirow}}
-\\usepackage{{makecell}}
-\\usepackage{{amssymb}}
-
-\\begin{{document}}
-
-\\centering
-\\setlength{{\\tabcolsep}}{{3pt}}
-\\renewcommand{{\\arraystretch}}{{1.2}}
-\\newsavebox{{\\benchmarktablebox}}
-\\sbox{{\\benchmarktablebox}}{{%
-\\begin{{tabular}}{{{col_spec}}}
-\\toprule
-\\multirow{{2}}{{*}}{{\\textbf{{Method}}}} & \\multirow{{2}}{{*}}{{\\textbf{{Source}}}} & \\multirow{{2}}{{*}}{{\\textbf{{\\makecell{{Semantic\\\\Info}}}}}} & {header_groups} \\\\
-{' '.join(cmidrules)}
-& & & {header_metrics} \\\\
-\\midrule
-{chr(10).join(row_lines)}
-\\bottomrule
-\\end{{tabular}}
-}}
-\\usebox{{\\benchmarktablebox}}
-
-\\vspace{{0.3cm}}
-\\makebox[\\wd\\benchmarktablebox][c]{{%
-\\parbox{{0.98\\wd\\benchmarktablebox}}{{%
-\\centering\\small
-Benchmark Reading Order summary automatically generated from run\\_benchmarks.py. Metric key: FPS $\\uparrow$ / BLEU-4 $\\uparrow$ / ARD $\\downarrow$ / Tau $\\uparrow$. Best results are in \\textbf{{bold}}; second-best are \\underline{{underlined}}.
-}}%
-}}
-
-\\end{{document}}
-"""
-
-    print("\n" + "=" * 108)
-    print("LATEX EQUIVALENTE")
-    print("=" * 108)
-    print(latex_doc)
-
-    output_path = Path(__file__).parent / "output_examples"
-    output_path.mkdir(parents=True, exist_ok=True)
-    tex_path = output_path / "benchmark_table.tex"
-    svg_path = output_path / "benchmark_table.svg"
-    png_path = output_path / "benchmark_table.png"
-    with open(tex_path, "w", encoding="utf-8", newline="\n") as tex_file:
-        tex_file.write(latex_doc)
-
-    with tempfile.TemporaryDirectory() as td:
-        latex_cmd = [
-            "latex",
-            "-jobname=file",
-            f"-output-directory={td}",
-            str(tex_path),
-        ]
-        try:
-            print(latex_cmd)
-            fp = subprocess.run(latex_cmd, timeout=15, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            dvi_path = os.path.join(td, 'file.dvi')
-            with open(dvi_path, 'rb') as f:
-                dvi_bytes = f.read()
-            with open(os.path.join(td, 'file.log'), 'rb') as f:
-                latex_log = f.read()
-        except Exception as e:
-            traceback.print_exc()
-
-        if fp.returncode != 0:
-            print(f"[LATEX] Falló latex (exit {fp.returncode}).")
-            print(latex_log[-1000:])
-            return
-        if not dvi_bytes:
-            print("[LATEX] latex no devolvió contenido.")
-            return
-        dvisvgm_bin = shutil.which("dvisvgm")
-        if dvisvgm_bin:
-            svg_name = svg_path.name
-            render_cmd = [dvisvgm_bin, "-o", svg_name, "file.dvi"]
-            print(render_cmd)
-            render_result = subprocess.run(
-                render_cmd,
-                timeout=15,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=td,
-            )
-            if render_result.returncode == 0:
-                shutil.move(os.path.join(td, svg_name), svg_path)
-                print(f"[LATEX] SVG renderizado en: {svg_path}")
-            else:
-                print(f"[LATEX] Falló dvisvgm (exit {render_result.returncode}).")
-                print(render_result.stdout[-1000:])
-                print(render_result.stderr[-1000:])
-        dvipng_bin = shutil.which("dvipng")
-        if dvipng_bin:
-            png_name = png_path.name
-            render_cmd = [dvipng_bin, "-T", "tight", "-o", png_name, "file.dvi"]
-            print(render_cmd)
-            render_result = subprocess.run(
-                render_cmd,
-                timeout=15,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                cwd=td,
-            )
-            if render_result.returncode == 0:
-                shutil.move(os.path.join(td, png_name), png_path)
-                print(f"[LATEX] PNG renderizado en: {png_path}")
-                return
-            print(f"[LATEX] Falló dvipng (exit {render_result.returncode}).")
-            print(render_result.stdout[-1000:])
-            print(render_result.stderr[-1000:])
-        if svg_path.exists():
-            print(f"[LATEX] Imagen generada en: {svg_path}")
-            return
-        print("[LATEX] No se pudo generar la imagen.")
+def save_category_results_to_csv(
+        category_report: Dict[str, Dict[str, Dict[str, Dict[str, Any]]]],
+        run_timestamp: str,
+        results_base_dir: Path,
+) -> Path:
+    run_dir = results_base_dir / run_timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = run_dir / f"{run_timestamp}_categories.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_CATEGORY_FIELDNAMES)
+        writer.writeheader()
+        for algo_name, datasets in category_report.items():
+            for dataset_id, categories in datasets.items():
+                for category, metrics in categories.items():
+                    writer.writerow({
+                        "run_timestamp": run_timestamp,
+                        "algorithm": algo_name,
+                        "dataset": dataset_id,
+                        "category": category,
+                        "n_samples": metrics["n_samples"],
+                        "avg_elements": metrics["avg_elements"],
+                        "avg_bleu": metrics["avg_bleu"],
+                        "avg_tau": metrics["avg_tau"],
+                        "avg_ard": metrics["avg_ard"],
+                        "b1": metrics["b1"],
+                        "b2": metrics["b2"],
+                        "b3": metrics["b3"],
+                        "b4": metrics["b4"],
+                    })
+    return csv_path
 
 
-
+def save_worst_cases_to_csv(
+        worst_cases_report: Dict[str, Dict[str, List[Dict[str, Any]]]],
+        run_timestamp: str,
+        results_base_dir: Path,
+) -> Path:
+    run_dir = results_base_dir / run_timestamp
+    run_dir.mkdir(parents=True, exist_ok=True)
+    csv_path = run_dir / f"{run_timestamp}_worst_cases.csv"
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=_CSV_WORST_CASES_FIELDNAMES)
+        writer.writeheader()
+        for algo_name, datasets in worst_cases_report.items():
+            for dataset_id, cases in datasets.items():
+                for case in cases:
+                    writer.writerow({
+                        "run_timestamp": run_timestamp,
+                        "algorithm": algo_name,
+                        "dataset": dataset_id,
+                        "sample_index": case["sample_index"],
+                        "category": case["category"],
+                        "n_elements": case["n_elements"],
+                        "bleu": case["bleu"],
+                        "tau": case["tau"],
+                        "ard": case["ard"],
+                    })
+    return csv_path
 
 
 if __name__ == "__main__":
@@ -1461,10 +817,10 @@ if __name__ == "__main__":
     # Usamos la Factory para parametrizar de forma dinámica nuestra función objetivo
     # Si mañana tu solución (ej: xycut) requiere parámetros adicionales, los pasas por aquí.
     xycutppy_sorter = ReadingOrderSorterFactory(
-        XYCutPPY(name="xycutppy-datalab", backend="datalab")
+        XYCutPPYReadingOrderAdapter(name="xycutppy-datalab", backend="datalab")
     )
     xycutppy_paper_sorter = ReadingOrderSorterFactory(
-        XYCutPPY(name="xycutppy-paper", backend="paper")
+        XYCutPPYReadingOrderAdapter(name="xycutppy-paper", backend="paper")
     )
     hantian_cpu_sorter = ReadingOrderSorterFactory(
         HantianLayoutReaderAdapter(name="LayoutReader [CPU]", device="cpu")
@@ -1473,18 +829,20 @@ if __name__ == "__main__":
         HantianLayoutReaderAdapter(name="LayoutReader [GPU]", device="cuda")
     )
     huridocs_sorter = ReadingOrderSorterFactory(
-        HuriDocsCandidateSelectorAdapter(name="huridocs")
+        HuriDocsCandidateSelectorAdapter(name="huridocs/CandidateSelector")
     )
     sorter_solutions = [
         xycutppy_sorter,
-        xycutppy_paper_sorter,
+        # xycutppy_paper_sorter,
         # hantian_cpu_sorter,
-        hantian_gpu_sorter,
-        huridocs_sorter,
+        # hantian_gpu_sorter,
+        # huridocs_sorter,
     ]
 
     # Diccionario para acumular los reportes de rendimiento
     final_report = {sorter.name: {} for sorter in sorter_solutions}
+    category_report: Dict[str, Dict[str, Any]] = {}
+    worst_cases_report: Dict[str, Dict[str, Any]] = {}
 
     # Lista de Datasets configurados para evaluación secuencial
     target_datasets = [
@@ -1494,7 +852,8 @@ if __name__ == "__main__":
     ]
 
     # Límite de muestras por dataset para pruebas ágiles de desarrollo (Sustituir por None en producción)
-    MAX_SAMPLES_TO_TEST = None
+    MAX_SAMPLES_TO_TEST = 10
+    MAX_WORST_CASES = TOP_N_WORST_SAMPLES
 
     total_algorithms = len(sorter_solutions)
     total_datasets = len(target_datasets)
@@ -1523,19 +882,33 @@ if __name__ == "__main__":
                     )
                     global_progress_bar.refresh()
 
-                metrics = benchmark_engine.evaluate_dataset(
+                result = benchmark_engine.evaluate_dataset(
                     dataset_id=target_ds,
                     sorter_callable=sorter_algorithm.algorithm,
                     max_samples=MAX_SAMPLES_TO_TEST,
                     on_progress=_on_progress,
+                    top_n_worst=MAX_WORST_CASES,
                 )
-                final_report[sorter_algorithm.name][target_ds] = metrics
+                # general_report mantiene backward compat
+                final_report[sorter_algorithm.name][target_ds] = result.get("general", {})
+                # nuevas estructuras
+                if result.get("categories"):
+                    category_report.setdefault(sorter_algorithm.name, {})[target_ds] = result["categories"]
+                if result.get("worst_cases"):
+                    worst_cases_report.setdefault(sorter_algorithm.name, {})[target_ds] = result["worst_cases"]
 
         global_progress_bar.n = 100.0
         global_progress_bar.set_description_str("Global 100% completado")
         global_progress_bar.refresh()
 
-    # Renderizado final en formato de consola (sin Markdown)
-    print_benchmark_console_dashboard(final_report)
-    print_final_benchmark_table(final_report)
-    print_and_render_benchmark_latex_table(final_report)
+    run_timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    results_dir = Path(__file__).parent / "results"
+    csv_path = save_results_to_csv(final_report, run_timestamp, results_dir)
+    print(f"\n✅ Resultados guardados en: {csv_path}")
+    if category_report:
+        cat_csv_path = save_category_results_to_csv(category_report, run_timestamp, results_dir)
+        print(f"   Métricas por categoría: {cat_csv_path}")
+    if worst_cases_report:
+        worst_csv_path = save_worst_cases_to_csv(worst_cases_report, run_timestamp, results_dir)
+        print(f"   Peores muestras: {worst_csv_path}")
+    print("   Ejecuta 'python report_benchmarks.py' para ver las métricas agregadas.")
